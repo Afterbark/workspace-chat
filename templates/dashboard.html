@@ -208,8 +208,18 @@
         .modal-content input[type="text"] { width: 100%; padding: 11px 14px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: 10px; box-sizing: border-box; font-size: 14px; }
         #modal-users-list { max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; margin-bottom: 16px; }
         .user-checkbox label { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; }
-        #participants-list { list-style: none; padding: 0; margin: 0 0 18px; max-height: 240px; overflow-y: auto; }
-        #participants-list li { padding: 9px 4px; border-bottom: 1px solid var(--border); font-weight: 600; }
+        #participants-list { list-style: none; padding: 0; margin: 0 0 6px; max-height: 240px; overflow-y: auto; }
+        #participants-list li { padding: 8px 4px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+        #participants-list li img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+        #participants-list li .p-name { flex: 1; font-weight: 600; }
+        #participants-list li .you-tag { font-size: 11px; color: var(--text-soft); font-weight: 600; }
+        .remove-btn { background: #fef2f2; color: var(--danger); border: none; border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+        .remove-btn:hover { background: #fee2e2; }
+        .add-block { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 14px; }
+        .add-block .lbl { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-soft); margin-bottom: 8px; }
+        .add-row { display: flex; gap: 8px; }
+        .add-row select { flex: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; font-size: 14px; background: #fff; }
+        .add-row .empty-note { color: var(--text-soft); font-size: 13px; padding: 4px 0; }
         .modal-btn { padding: 10px 16px; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; }
         .modal-btn.primary { background: var(--accent); color: white; }
         .modal-btn.ghost { background: var(--bg); color: var(--text); }
@@ -340,7 +350,11 @@
         <div class="modal-content">
             <h3>Group Participants</h3>
             <ul id="participants-list"></ul>
-            <button type="button" class="modal-btn ghost" style="width:100%;" onclick="document.getElementById('participantsModal').style.display='none'">Close</button>
+            <div class="add-block">
+                <div class="lbl">Add people</div>
+                <div class="add-row" id="add-participant-row"></div>
+            </div>
+            <button type="button" class="modal-btn ghost" style="width:100%; margin-top:16px;" onclick="document.getElementById('participantsModal').style.display='none'">Close</button>
         </div>
     </div>
 
@@ -367,6 +381,7 @@
         let groupMembers = [];          // [{id, username}]
         let seenState = {};             // reader_id -> {name, last_read_id}
         let groupMemberCount = 0;
+        const removedGroups = new Set(); // groups I've been removed from this session
 
         socket.emit('register_user');
 
@@ -552,6 +567,8 @@
         });
 
         socket.on('new_group', function(group) {
+            removedGroups.delete(group.id);
+            if (document.getElementById('nav-group-' + group.id)) return;
             document.getElementById('group-list').insertAdjacentHTML('beforeend', `
                 <div class="item chat-nav" id="nav-group-${group.id}" data-name="${group.name.toLowerCase()}" onclick="openChat('group', ${group.id}, '${group.name}')">
                     <div class="group-ic">#</div>
@@ -561,14 +578,40 @@
             showToast("Added to Group", `You were added to # ${group.name}`);
         });
 
-        socket.on('show_participants', function(data) {
+        let participantsGroupId = null;
+
+        function renderParticipants(members, nonMembers) {
             const list = document.getElementById('participants-list');
             list.innerHTML = '';
-            data.members.forEach(m => {
+            members.forEach(m => {
                 const li = document.createElement('li');
-                li.textContent = '@ ' + m;
+                const isMe = m.id === myUserId;
+                li.innerHTML = `
+                    <img src="${avatarFor(m.id, m.username)}">
+                    <span class="p-name">${escapeHtml(m.username)}</span>
+                    ${isMe ? '<span class="you-tag">You</span>'
+                           : `<button class="remove-btn" data-id="${m.id}" data-name="${escapeHtml(m.username)}">Remove</button>`}`;
                 list.appendChild(li);
             });
+            list.querySelectorAll('.remove-btn').forEach(btn => {
+                btn.onclick = () => removeParticipant(parseInt(btn.dataset.id), btn.dataset.name);
+            });
+
+            const row = document.getElementById('add-participant-row');
+            if (!nonMembers.length) {
+                row.innerHTML = '<div class="empty-note">Everyone is already in this group.</div>';
+            } else {
+                row.innerHTML = `
+                    <select id="add-participant-select">
+                        ${nonMembers.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join('')}
+                    </select>
+                    <button class="modal-btn primary" onclick="addParticipant()">Add</button>`;
+            }
+        }
+
+        socket.on('show_participants', function(data) {
+            participantsGroupId = data.group_id;
+            renderParticipants(data.members, data.non_members);
             document.getElementById('participantsModal').style.display = 'block';
         });
 
@@ -576,6 +619,55 @@
             if (currentChatType === 'group' && currentChatId)
                 socket.emit('get_participants', { group_id: currentChatId });
         }
+
+        function addParticipant() {
+            const sel = document.getElementById('add-participant-select');
+            if (!sel || !participantsGroupId) return;
+            socket.emit('add_participant', { group_id: participantsGroupId, user_id: parseInt(sel.value) });
+        }
+
+        function removeParticipant(userId, name) {
+            if (!participantsGroupId) return;
+            if (confirm(`Remove ${name} from this group?`))
+                socket.emit('remove_participant', { group_id: participantsGroupId, user_id: userId });
+        }
+
+        // Live membership changes for a group you're viewing.
+        socket.on('participants_updated', function(data) {
+            const modalOpen = document.getElementById('participantsModal').style.display === 'block';
+            if (modalOpen && data.group_id === participantsGroupId) {
+                renderParticipants(data.members, data.non_members);
+            }
+            if (currentChatType === 'group' && currentChatId === data.group_id) {
+                groupMembers = data.members;
+                groupMemberCount = data.member_count;
+                document.getElementById('chat-subtitle').innerText = `${data.member_count} members`;
+            }
+        });
+
+        // You were removed from a group by someone else.
+        socket.on('removed_from_group', function(data) {
+            removedGroups.add(data.id);
+            const nav = document.getElementById('nav-group-' + data.id);
+            if (nav) nav.remove();
+            if (participantsGroupId === data.id) {
+                document.getElementById('participantsModal').style.display = 'none';
+                participantsGroupId = null;
+            }
+            if (currentChatType === 'group' && currentChatId === data.id) {
+                currentChatType = null; currentChatId = null;
+                document.getElementById('chat-box').innerHTML =
+                    '<div class="empty-state"><div class="big">&#128075;</div><div>You were removed from this group.</div></div>';
+                document.getElementById('chat-title').innerText = 'Select a chat to begin';
+                document.getElementById('chat-subtitle').innerText = '';
+                document.getElementById('header-actions').innerHTML = '';
+                document.getElementById('header-avatar').style.display = 'none';
+                document.getElementById('message-input').disabled = true;
+                document.getElementById('send-btn').disabled = true;
+                document.getElementById('attach-btn').disabled = true;
+            }
+            showToast('Removed from group', `${data.by} removed you from # ${data.name}`);
+        });
         function leaveGroup() {
             if (currentChatType === 'group' && currentChatId && confirm("Leave this group?"))
                 window.location.href = '/leave_group/' + currentChatId;
@@ -679,6 +771,7 @@
         /* ---------- incoming messages ---------- */
         socket.on('receive_message', function(data) {
             if (renderedMessages.has(data.msg_id)) return;
+            if (data.type === 'group' && removedGroups.has(data.group_id)) return;
 
             const inThisChat =
                 (data.type === 'dm' && currentChatType === 'dm' && (data.sender_id === currentChatId || data.sender_id === myUserId)) ||

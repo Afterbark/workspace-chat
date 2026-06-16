@@ -336,11 +336,67 @@ def logout():
 def on_register_user():
     join_room(f"user_sys_{current_user.id}")
 
+def _participant_lists(group):
+    """Return (members, non_members) as lists of {id, username}."""
+    member_ids = {u.id for u in group.members}
+    members = [{'id': u.id, 'username': u.username} for u in group.members]
+    non_members = [{'id': u.id, 'username': u.username}
+                   for u in User.query.order_by(func.lower(User.username)).all()
+                   if u.id not in member_ids]
+    return members, non_members
+
+def broadcast_participants(group):
+    """Tell everyone currently viewing the group that its membership changed."""
+    members, non_members = _participant_lists(group)
+    socketio.emit('participants_updated', {
+        'group_id': group.id,
+        'members': members,
+        'non_members': non_members,
+        'member_count': len(members),
+    }, to=f"group_{group.id}")
+
 @socketio.on('get_participants')
 def on_get_participants(data):
     group = ChatGroup.query.get(int(data['group_id']))
-    if group:
-        emit('show_participants', {'members': [u.username for u in group.members]})
+    if not group or current_user not in group.members:
+        return
+    members, non_members = _participant_lists(group)
+    emit('show_participants', {
+        'group_id': group.id,
+        'members': members,
+        'non_members': non_members,
+    })
+
+@socketio.on('add_participant')
+def on_add_participant(data):
+    group = ChatGroup.query.get(int(data['group_id']))
+    user = User.query.get(int(data['user_id']))
+    # Only existing members can manage membership.
+    if not group or not user or current_user not in group.members:
+        return
+    if user in group.members:
+        return
+    group.members.append(user)
+    db.session.commit()
+    # Make the group appear in the newly added user's sidebar.
+    socketio.emit('new_group', {'id': group.id, 'name': group.name}, to=f"user_sys_{user.id}")
+    broadcast_participants(group)
+
+@socketio.on('remove_participant')
+def on_remove_participant(data):
+    group = ChatGroup.query.get(int(data['group_id']))
+    user = User.query.get(int(data['user_id']))
+    if not group or not user or current_user not in group.members:
+        return
+    if user not in group.members:
+        return
+    group.members.remove(user)
+    db.session.commit()
+    # Tell the removed user so the group disappears from their app.
+    socketio.emit('removed_from_group', {
+        'id': group.id, 'name': group.name, 'by': current_user.username
+    }, to=f"user_sys_{user.id}")
+    broadcast_participants(group)
 
 @socketio.on('join_chat')
 def on_join(data):
