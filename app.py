@@ -7,11 +7,19 @@ import mimetypes
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
+from sqlalchemy import func, inspect, text, and_, or_
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_socketio import SocketIO, emit, join_room
+
+# Optional Cloudinary support (persistent file storage). Falls back to local disk.
+try:
+    import cloudinary
+    import cloudinary.uploader
+    _CLOUDINARY_AVAILABLE = True
+except Exception:
+    _CLOUDINARY_AVAILABLE = False
 
 app = Flask(__name__)
 
@@ -30,9 +38,26 @@ app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 # --- FILE UPLOAD SETTINGS ---
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
 app.config['CHAT_UPLOAD_FOLDER'] = 'static/chat_uploads'
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # Upgraded to 50MB to handle MP4s
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB to handle MP4s
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['CHAT_UPLOAD_FOLDER'], exist_ok=True)
+
+# --- CLOUDINARY ---
+# Configured automatically from the CLOUDINARY_URL env var, or from the three
+# CLOUDINARY_* vars. If none are set we transparently fall back to local disk.
+USE_CLOUDINARY = False
+if _CLOUDINARY_AVAILABLE:
+    if os.environ.get('CLOUDINARY_URL'):
+        cloudinary.config(secure=True)
+        USE_CLOUDINARY = True
+    elif os.environ.get('CLOUDINARY_CLOUD_NAME'):
+        cloudinary.config(
+            cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
+            api_key=os.environ.get('CLOUDINARY_API_KEY'),
+            api_secret=os.environ.get('CLOUDINARY_API_SECRET'),
+            secure=True,
+        )
+        USE_CLOUDINARY = True
 
 db = SQLAlchemy(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -41,6 +66,9 @@ login_manager.login_view = 'login'
 
 # How many messages to load per "page" when opening a chat / loading older history.
 PAGE_SIZE = 30
+
+# In-memory presence tracking: user_id -> number of active socket connections.
+online_users = {}
 
 group_members = db.Table('group_members',
     db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
@@ -68,8 +96,11 @@ class Message(db.Model):
     file_type = db.Column(db.String(50), nullable=True)
     file_name = db.Column(db.String(150), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.now)
+    edited = db.Column(db.Boolean, default=False)
+    is_deleted = db.Column(db.Boolean, default=False)
+    reply_to_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=True)
 
-# Tracks which user has read which message (powers "Seen" / "Seen by N").
+# Tracks which user has read which message (powers "Seen" / unread counts).
 class MessageRead(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False, index=True)
@@ -77,22 +108,54 @@ class MessageRead(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.now)
     __table_args__ = (db.UniqueConstraint('message_id', 'user_id', name='uq_message_user_read'),)
 
+# Emoji reactions on messages.
+class MessageReaction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    emoji = db.Column(db.String(16), nullable=False)
+    __table_args__ = (db.UniqueConstraint('message_id', 'user_id', 'emoji', name='uq_message_user_emoji'),)
+
 
 def safe_auto_migrate():
-    """Create any missing tables without touching existing data.
+    """Create missing tables and add new columns without destroying data.
 
-    On the live Heroku Postgres DB the User/Message/ChatGroup tables already
-    exist with data. create_all() only creates tables that don't yet exist, so
-    it will add the new message_read table while leaving existing rows intact.
+    create_all() makes new tables (message_read, message_reaction) but never
+    alters existing ones, so we add the new Message columns by hand. Both
+    SQLite and Postgres support 'ALTER TABLE ... ADD COLUMN'.
     """
     with app.app_context():
         db.create_all()
+        insp = inspect(db.engine)
+        try:
+            cols = {c['name'] for c in insp.get_columns('message')}
+        except Exception:
+            return
+        to_add = []
+        if 'edited' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN edited BOOLEAN DEFAULT FALSE")
+        if 'is_deleted' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE")
+        if 'reply_to_id' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN reply_to_id INTEGER")
+        for stmt in to_add:
+            try:
+                db.session.execute(text(stmt))
+            except Exception:
+                db.session.rollback()
+        if to_add:
+            db.session.commit()
 
 
-# ---------- DM/GROUP HELPERS ----------
+# ---------- HELPERS ----------
 
 def dm_room(a, b):
     return f"dm_{min(a, b)}_{max(a, b)}"
+
+def room_for_message(m):
+    if m.group_id:
+        return f"group_{m.group_id}"
+    return dm_room(m.sender_id, m.receiver_id)
 
 def base_chat_query(chat_type, chat_id, me_id):
     """Return a query for all messages in the given chat, ordered oldest->newest."""
@@ -105,16 +168,46 @@ def base_chat_query(chat_type, chat_id, me_id):
         q = Message.query.filter_by(group_id=chat_id)
     return q.order_by(Message.id)
 
+def get_reactions(message_id):
+    """Return [{'emoji': '👍', 'user_ids': [..]}] for a message."""
+    rows = MessageReaction.query.filter_by(message_id=message_id).all()
+    grouped = {}
+    for r in rows:
+        grouped.setdefault(r.emoji, []).append(r.user_id)
+    return [{'emoji': e, 'user_ids': ids} for e, ids in grouped.items()]
+
+def reply_preview(reply_to_id):
+    if not reply_to_id:
+        return None
+    m = Message.query.get(reply_to_id)
+    if not m:
+        return None
+    sender = User.query.get(m.sender_id)
+    if m.is_deleted:
+        snippet = 'Deleted message'
+    elif m.content:
+        snippet = m.content[:120]
+    elif m.file_type:
+        snippet = f'[{m.file_type}]'
+    else:
+        snippet = ''
+    return {'msg_id': m.id, 'sender': sender.username if sender else '?', 'snippet': snippet}
+
 def serialize_message(m):
     return {
         'msg_id': m.id,
         'sender': User.query.get(m.sender_id).username,
         'sender_id': m.sender_id,
-        'content': m.content,
-        'file_url': m.file_url,
-        'file_type': m.file_type,
-        'file_name': m.file_name,
+        'content': '' if m.is_deleted else m.content,
+        'file_url': None if m.is_deleted else m.file_url,
+        'file_type': None if m.is_deleted else m.file_type,
+        'file_name': None if m.is_deleted else m.file_name,
         'timestamp': m.timestamp.strftime('%I:%M %p'),
+        'ts_iso': m.timestamp.isoformat(),
+        'edited': bool(m.edited),
+        'is_deleted': bool(m.is_deleted),
+        'reply_to': reply_preview(m.reply_to_id),
+        'reactions': get_reactions(m.id),
     }
 
 def get_seen_state(chat_type, chat_id, me_id):
@@ -135,6 +228,18 @@ def get_seen_state(chat_type, chat_id, me_id):
             state[reader_id] = {'name': reader.username, 'last_read_id': last_read}
     return state
 
+def get_unread(chat_type, chat_id, me_id):
+    """Count messages from others in this chat that the user hasn't read."""
+    ids = [r.id for r in base_chat_query(chat_type, chat_id, me_id)
+           .filter(Message.sender_id != me_id, Message.is_deleted == False)
+           .with_entities(Message.id).all()]
+    if not ids:
+        return 0
+    read = MessageRead.query.filter(
+        MessageRead.user_id == me_id, MessageRead.message_id.in_(ids)
+    ).count()
+    return len(ids) - read
+
 def extract_mentions(content, group_id):
     """Return list of user ids mentioned via @username among the group's members."""
     if not content or not group_id:
@@ -146,6 +251,23 @@ def extract_mentions(content, group_id):
     if not group:
         return []
     return [u.id for u in group.members if u.username.lower() in handles]
+
+def _participant_lists(group):
+    member_ids = {u.id for u in group.members}
+    members = [{'id': u.id, 'username': u.username} for u in group.members]
+    non_members = [{'id': u.id, 'username': u.username}
+                   for u in User.query.order_by(func.lower(User.username)).all()
+                   if u.id not in member_ids]
+    return members, non_members
+
+def broadcast_participants(group):
+    members, non_members = _participant_lists(group)
+    socketio.emit('participants_updated', {
+        'group_id': group.id,
+        'members': members,
+        'non_members': non_members,
+        'member_count': len(members),
+    }, to=f"group_{group.id}")
 
 
 @login_manager.user_loader
@@ -223,7 +345,10 @@ def dashboard():
     all_users = User.query.filter(User.id != current_user.id).all()
     user_groups = current_user.groups
     user_dict = {u.id: u for u in User.query.all()}
-    return render_template('dashboard.html', users=all_users, groups=user_groups, user_dict=user_dict)
+    dm_unread = {u.id: get_unread('dm', u.id, current_user.id) for u in all_users}
+    group_unread = {g.id: get_unread('group', g.id, current_user.id) for g in user_groups}
+    return render_template('dashboard.html', users=all_users, groups=user_groups,
+                           user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread)
 
 @app.route('/upload_profile', methods=['POST'])
 @login_required
@@ -232,11 +357,18 @@ def upload_profile():
         return redirect(url_for('dashboard'))
     file = request.files['file']
     if file and file.filename != '':
-        filename = secure_filename(file.filename)
-        ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'png'
-        new_filename = f"user_{current_user.id}.{ext}"
-        file.save(os.path.join(app.config['UPLOAD_FOLDER'], new_filename))
-        current_user.profile_pic = new_filename
+        if USE_CLOUDINARY:
+            result = cloudinary.uploader.upload(
+                file, folder="workspace_chat/profiles",
+                public_id=f"user_{current_user.id}", overwrite=True, resource_type="image"
+            )
+            current_user.profile_pic = result['secure_url']
+        else:
+            filename = secure_filename(file.filename)
+            ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'png'
+            new_filename = f"user_{current_user.id}.{ext}"
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], new_filename))
+            current_user.profile_pic = new_filename
         db.session.commit()
     return redirect(url_for('dashboard'))
 
@@ -249,14 +381,11 @@ def upload_chat_file():
     file = request.files['file']
     chat_type = request.form.get('chat_type')
     chat_id = int(request.form.get('chat_id'))
+    reply_to_id = request.form.get('reply_to_id')
+    reply_to_id = int(reply_to_id) if reply_to_id else None
 
     if file and file.filename != '':
         filename = secure_filename(file.filename)
-        unique_name = f"{uuid.uuid4().hex}_{filename}"
-        file_path = os.path.join(app.config['CHAT_UPLOAD_FOLDER'], unique_name)
-        file.save(file_path)
-
-        file_url = url_for('static', filename=f'chat_uploads/{unique_name}')
 
         mime_type, _ = mimetypes.guess_type(filename)
         if mime_type:
@@ -267,11 +396,25 @@ def upload_chat_file():
         else:
             file_category = 'document'
 
+        if USE_CLOUDINARY:
+            result = cloudinary.uploader.upload(
+                file, folder="workspace_chat/files", resource_type="auto"
+            )
+            file_url = result['secure_url']
+        else:
+            unique_name = f"{uuid.uuid4().hex}_{filename}"
+            file.save(os.path.join(app.config['CHAT_UPLOAD_FOLDER'], unique_name))
+            file_url = url_for('static', filename=f'chat_uploads/{unique_name}')
+
         if chat_type == 'dm':
-            new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content="", file_url=file_url, file_type=file_category, file_name=filename)
+            new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content="",
+                              file_url=file_url, file_type=file_category, file_name=filename,
+                              reply_to_id=reply_to_id)
             room = dm_room(current_user.id, chat_id)
         else:
-            new_msg = Message(sender_id=current_user.id, group_id=chat_id, content="", file_url=file_url, file_type=file_category, file_name=filename)
+            new_msg = Message(sender_id=current_user.id, group_id=chat_id, content="",
+                              file_url=file_url, file_type=file_category, file_name=filename,
+                              reply_to_id=reply_to_id)
             room = f"group_{chat_id}"
 
         db.session.add(new_msg)
@@ -282,7 +425,8 @@ def upload_chat_file():
             'file_url': file_url, 'file_type': file_category, 'file_name': filename,
             'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
             'sender_id': current_user.id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
-            'mentions': []
+            'ts_iso': new_msg.timestamp.isoformat(), 'mentions': [],
+            'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False
         }
 
         if chat_type == 'dm':
@@ -334,26 +478,25 @@ def logout():
 # --- WEBSOCKETS ---
 @socketio.on('register_user')
 def on_register_user():
+    if not current_user.is_authenticated:
+        return
     join_room(f"user_sys_{current_user.id}")
+    # presence
+    online_users[current_user.id] = online_users.get(current_user.id, 0) + 1
+    if online_users[current_user.id] == 1:
+        socketio.emit('presence_update', {'user_id': current_user.id, 'online': True})
+    emit('presence_state', {'online': list(online_users.keys())})
 
-def _participant_lists(group):
-    """Return (members, non_members) as lists of {id, username}."""
-    member_ids = {u.id for u in group.members}
-    members = [{'id': u.id, 'username': u.username} for u in group.members]
-    non_members = [{'id': u.id, 'username': u.username}
-                   for u in User.query.order_by(func.lower(User.username)).all()
-                   if u.id not in member_ids]
-    return members, non_members
-
-def broadcast_participants(group):
-    """Tell everyone currently viewing the group that its membership changed."""
-    members, non_members = _participant_lists(group)
-    socketio.emit('participants_updated', {
-        'group_id': group.id,
-        'members': members,
-        'non_members': non_members,
-        'member_count': len(members),
-    }, to=f"group_{group.id}")
+@socketio.on('disconnect')
+def on_disconnect():
+    if not current_user.is_authenticated:
+        return
+    uid = current_user.id
+    if uid in online_users:
+        online_users[uid] -= 1
+        if online_users[uid] <= 0:
+            online_users.pop(uid, None)
+            socketio.emit('presence_update', {'user_id': uid, 'online': False})
 
 @socketio.on('get_participants')
 def on_get_participants(data):
@@ -361,24 +504,18 @@ def on_get_participants(data):
     if not group or current_user not in group.members:
         return
     members, non_members = _participant_lists(group)
-    emit('show_participants', {
-        'group_id': group.id,
-        'members': members,
-        'non_members': non_members,
-    })
+    emit('show_participants', {'group_id': group.id, 'members': members, 'non_members': non_members})
 
 @socketio.on('add_participant')
 def on_add_participant(data):
     group = ChatGroup.query.get(int(data['group_id']))
     user = User.query.get(int(data['user_id']))
-    # Only existing members can manage membership.
     if not group or not user or current_user not in group.members:
         return
     if user in group.members:
         return
     group.members.append(user)
     db.session.commit()
-    # Make the group appear in the newly added user's sidebar.
     socketio.emit('new_group', {'id': group.id, 'name': group.name}, to=f"user_sys_{user.id}")
     broadcast_participants(group)
 
@@ -392,7 +529,6 @@ def on_remove_participant(data):
         return
     group.members.remove(user)
     db.session.commit()
-    # Tell the removed user so the group disappears from their app.
     socketio.emit('removed_from_group', {
         'id': group.id, 'name': group.name, 'by': current_user.username
     }, to=f"user_sys_{user.id}")
@@ -403,16 +539,11 @@ def on_join(data):
     chat_type = data['type']
     chat_id = int(data['id'])
 
-    if chat_type == 'dm':
-        room = dm_room(current_user.id, chat_id)
-    else:
-        room = f"group_{chat_id}"
-
+    room = dm_room(current_user.id, chat_id) if chat_type == 'dm' else f"group_{chat_id}"
     join_room(room)
 
     q = base_chat_query(chat_type, chat_id, current_user.id)
     total = q.count()
-    # Load only the most recent PAGE_SIZE messages; older ones load on demand.
     recent = q.offset(max(0, total - PAGE_SIZE)).limit(PAGE_SIZE).all()
     history = [serialize_message(m) for m in recent]
 
@@ -445,8 +576,6 @@ def on_load_older(data):
 
 @socketio.on('mark_read')
 def on_mark_read(data):
-    """Mark every message in this chat (not sent by me) as read by me, then
-    tell the room so senders can update their 'Seen' indicators."""
     chat_type = data['type']
     chat_id = int(data['id'])
 
@@ -476,10 +605,8 @@ def on_mark_read(data):
 
     room = dm_room(current_user.id, chat_id) if chat_type == 'dm' else f"group_{chat_id}"
     emit('messages_seen', {
-        'type': chat_type,
-        'chat_id': chat_id,
-        'reader_id': current_user.id,
-        'reader_name': current_user.username,
+        'type': chat_type, 'chat_id': chat_id,
+        'reader_id': current_user.id, 'reader_name': current_user.username,
         'last_read_id': last_read_id,
     }, to=room, include_self=False)
 
@@ -492,12 +619,14 @@ def handle_typing(data):
 @socketio.on('send_message')
 def handle_message(data):
     chat_type, chat_id, content = data['type'], int(data['id']), data['message']
+    reply_to_id = data.get('reply_to_id')
+    reply_to_id = int(reply_to_id) if reply_to_id else None
 
     if chat_type == 'dm':
-        new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content=content)
+        new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content=content, reply_to_id=reply_to_id)
         room = dm_room(current_user.id, chat_id)
     else:
-        new_msg = Message(sender_id=current_user.id, group_id=chat_id, content=content)
+        new_msg = Message(sender_id=current_user.id, group_id=chat_id, content=content, reply_to_id=reply_to_id)
         room = f"group_{chat_id}"
 
     db.session.add(new_msg)
@@ -510,7 +639,8 @@ def handle_message(data):
         'file_url': None, 'file_type': None, 'file_name': None,
         'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
         'sender_id': current_user.id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
-        'mentions': mentions
+        'ts_iso': new_msg.timestamp.isoformat(), 'mentions': mentions,
+        'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False
     }
 
     if chat_type == 'dm':
@@ -523,6 +653,92 @@ def handle_message(data):
                 emit('receive_message', msg_packet, to=f"user_sys_{user.id}")
 
     emit('receive_message', msg_packet, to=room)
+
+@socketio.on('edit_message')
+def on_edit_message(data):
+    m = Message.query.get(int(data['message_id']))
+    new_content = (data.get('content') or '').strip()
+    if not m or m.sender_id != current_user.id or m.is_deleted or not new_content:
+        return
+    m.content = new_content
+    m.edited = True
+    db.session.commit()
+    socketio.emit('message_edited', {
+        'msg_id': m.id, 'content': new_content, 'edited': True
+    }, to=room_for_message(m))
+
+@socketio.on('delete_message')
+def on_delete_message(data):
+    m = Message.query.get(int(data['message_id']))
+    if not m or m.sender_id != current_user.id or m.is_deleted:
+        return
+    m.is_deleted = True
+    m.content = ""
+    m.file_url = None
+    m.file_type = None
+    m.file_name = None
+    db.session.commit()
+    socketio.emit('message_deleted', {'msg_id': m.id}, to=room_for_message(m))
+
+@socketio.on('toggle_reaction')
+def on_toggle_reaction(data):
+    m = Message.query.get(int(data['message_id']))
+    emoji = (data.get('emoji') or '')[:16]
+    if not m or m.is_deleted or not emoji:
+        return
+    existing = MessageReaction.query.filter_by(
+        message_id=m.id, user_id=current_user.id, emoji=emoji
+    ).first()
+    if existing:
+        db.session.delete(existing)
+    else:
+        db.session.add(MessageReaction(message_id=m.id, user_id=current_user.id, emoji=emoji))
+    db.session.commit()
+    socketio.emit('reaction_updated', {
+        'msg_id': m.id, 'reactions': get_reactions(m.id)
+    }, to=room_for_message(m))
+
+@socketio.on('search_messages')
+def on_search(data):
+    query = (data.get('query') or '').strip()
+    if len(query) < 2:
+        emit('search_results', {'query': query, 'results': []})
+        return
+
+    my_group_ids = [g.id for g in current_user.groups]
+    like = f"%{query}%"
+
+    scope_conds = []
+    if my_group_ids:
+        scope_conds.append(Message.group_id.in_(my_group_ids))
+    scope_conds.append(and_(
+        Message.group_id.is_(None),
+        or_(Message.sender_id == current_user.id, Message.receiver_id == current_user.id)
+    ))
+
+    msgs = Message.query.filter(
+        Message.is_deleted == False,
+        Message.content.isnot(None),
+        Message.content.ilike(like),
+        or_(*scope_conds)
+    ).order_by(Message.id.desc()).limit(40).all()
+
+    results = []
+    for m in msgs:
+        sender = User.query.get(m.sender_id)
+        if m.group_id:
+            group = ChatGroup.query.get(m.group_id)
+            ctype, cid, cname = 'group', m.group_id, (group.name if group else '?')
+        else:
+            other_id = m.receiver_id if m.sender_id == current_user.id else m.sender_id
+            other = User.query.get(other_id)
+            ctype, cid, cname = 'dm', other_id, (other.username if other else '?')
+        results.append({
+            'msg_id': m.id, 'type': ctype, 'chat_id': cid, 'chat_name': cname,
+            'sender': sender.username if sender else '?', 'content': m.content,
+            'when': m.timestamp.strftime('%b %d, %I:%M %p'),
+        })
+    emit('search_results', {'query': query, 'results': results})
 
 
 # Run migrations at import time so it also works under gunicorn/gevent on Heroku.
