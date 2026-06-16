@@ -1,73 +1,70 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Register - Workspace</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register - Workspace Chat</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .card { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 400px; }
-        h2 { margin-top: 0; color: #333; text-align: center; }
-        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; font-size: 14px;}
-        button { width: 100%; padding: 12px; background-color: #2c3e50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; transition: 0.2s;}
-        button:hover { background-color: #1a252f; }
-        .flash { background: #e74c3c; color: white; padding: 10px; border-radius: 5px; margin-bottom: 15px; text-align: center; font-size: 14px; }
-        
-        /* Checklist Styles */
-        .requirements { font-size: 13px; margin: 10px 0 20px 0; background: #f9f9f9; padding: 15px; border-radius: 5px; }
-        .req-item { display: flex; align-items: center; margin-bottom: 5px; }
-        .req-icon { margin-right: 8px; font-weight: bold; width: 15px;}
-        .valid { color: #27ae60; }
-        .invalid { color: #e74c3c; }
+        :root { --accent:#2563eb; --bg:#f0f2f5; --text:#111b21; --soft:#667781; --border:#e9edef; --danger:#ef4444; --green:#22c55e; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #eef2ff, #f0f2f5); display: flex; justify-content: center;
+            align-items: center; height: 100vh; margin: 0; }
+        .card { background: #fff; padding: 40px; border-radius: 18px; box-shadow: 0 10px 40px rgba(0,0,0,.08); width: 100%; max-width: 400px; }
+        .logo { text-align: center; font-size: 40px; margin-bottom: 6px; }
+        h2 { margin: 0 0 4px; color: var(--text); text-align: center; }
+        .sub { text-align: center; color: var(--soft); font-size: 14px; margin-bottom: 24px; }
+        input { width: 100%; padding: 13px 16px; margin: 8px 0; border: 1px solid var(--border); border-radius: 12px; font-size: 15px; outline: none; }
+        input:focus { border-color: var(--accent); }
+        button { width: 100%; padding: 14px; background: var(--accent); color: #fff; border: none; border-radius: 12px; cursor: pointer; font-size: 16px; font-weight: 600; margin-top: 10px; transition: .15s; }
+        button:hover { filter: brightness(1.05); }
+        .flash { background: #fef2f2; color: var(--danger); padding: 11px; border-radius: 10px; margin-bottom: 16px; text-align: center; font-size: 14px; border: 1px solid #fecaca; }
+        .requirements { font-size: 13px; margin: 10px 0 16px; background: var(--bg); padding: 14px 16px; border-radius: 12px; }
+        .req-item { display: flex; align-items: center; margin-bottom: 5px; color: var(--danger); }
+        .req-item:last-child { margin-bottom: 0; }
+        .req-icon { margin-right: 8px; font-weight: bold; width: 15px; }
+        .valid { color: var(--green); }
+        .links { text-align: center; font-size: 14px; margin-top: 18px; color: var(--soft); }
+        .links a { color: var(--accent); text-decoration: none; font-weight: 600; }
+        .links a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2>Join Workspace</h2>
-        
+        <div class="logo">&#128172;</div>
+        <h2>Create your account</h2>
+        <div class="sub">Join Workspace Chat</div>
+
         {% with messages = get_flashed_messages() %}
-          {% if messages %}
-            {% for message in messages %}
-              <div class="flash">{{ message }}</div>
-            {% endfor %}
-          {% endif %}
+          {% if messages %}{% for message in messages %}<div class="flash">{{ message }}</div>{% endfor %}{% endif %}
         {% endwith %}
 
         <form method="POST">
-            <input type="text" name="username" placeholder="Choose a Username" required>
-            <input type="password" id="password" name="password" placeholder="Choose a Password" required oninput="checkPassword()">
-            
+            <input type="text" name="username" placeholder="Choose a username" required>
+            <input type="password" id="password" name="password" placeholder="Choose a password" required oninput="checkPassword()">
+
             <div class="requirements">
-                <div id="req-length" class="req-item invalid"><span class="req-icon">✗</span> At least 8 characters</div>
-                <div id="req-upper" class="req-item invalid"><span class="req-icon">✗</span> One uppercase letter</div>
-                <div id="req-number" class="req-item invalid"><span class="req-icon">✗</span> One number</div>
+                <div id="req-length" class="req-item"><span class="req-icon">&#10007;</span> At least 8 characters</div>
+                <div id="req-upper" class="req-item"><span class="req-icon">&#10007;</span> One uppercase letter</div>
+                <div id="req-number" class="req-item"><span class="req-icon">&#10007;</span> One number</div>
             </div>
 
             <button type="submit">Register</button>
         </form>
-        <p style="text-align: center; font-size: 14px;">Already have an account? <a href="/" style="color: #3498db; text-decoration: none;">Login here</a>.</p>
+        <div class="links">Already have an account? <a href="/">Login here</a></div>
     </div>
 
     <script>
+        function updateReq(id, isValid, label) {
+            const el = document.getElementById(id);
+            el.className = 'req-item' + (isValid ? ' valid' : '');
+            el.innerHTML = `<span class="req-icon">${isValid ? '✓' : '✗'}</span> ${label}`;
+        }
         function checkPassword() {
             const pw = document.getElementById('password').value;
-            
-            const hasLength = pw.length >= 8;
-            const hasUpper = /[A-Z]/.test(pw);
-            const hasNumber = /\d/.test(pw);
-            
-            updateReq('req-length', hasLength);
-            updateReq('req-upper', hasUpper);
-            updateReq('req-number', hasNumber);
-        }
-
-        function updateReq(id, isValid) {
-            const el = document.getElementById(id);
-            if (isValid) {
-                el.className = 'req-item valid';
-                el.innerHTML = '<span class="req-icon">✓</span>' + el.innerText.substring(1);
-            } else {
-                el.className = 'req-item invalid';
-                el.innerHTML = '<span class="req-icon">✗</span>' + el.innerText.substring(1);
-            }
+            updateReq('req-length', pw.length >= 8, 'At least 8 characters');
+            updateReq('req-upper', /[A-Z]/.test(pw), 'One uppercase letter');
+            updateReq('req-number', /\d/.test(pw), 'One number');
         }
     </script>
 </body>
