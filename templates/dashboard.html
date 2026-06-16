@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Workspace Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #ecf0f1; margin: 0; display: flex; height: 100vh; }
+        
+        .sidebar { width: 280px; background-color: #2c3e50; color: white; display: flex; flex-direction: column; overflow-y: auto; }
+        .sidebar-header { padding: 20px; background-color: #1a252f; text-align: center; border-bottom: 1px solid #34495e; }
+        
+        .profile-pic { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; margin-right: 12px; border: 2px solid #3498db; }
+        .sidebar-profile-pic { width: 70px; height: 70px; border-radius: 50%; object-fit: cover; border: 3px solid #3498db; margin-bottom: 10px; }
+        
+        .section-title { padding: 10px 20px; font-size: 12px; color: #7f8c8d; text-transform: uppercase; margin-top: 10px; }
+        .item { padding: 12px 20px; cursor: pointer; border-bottom: 1px solid #34495e; transition: 0.2s; border-left: 4px solid transparent; display: flex; justify-content: space-between; align-items: center; }
+        .item:hover { background-color: #34495e; }
+        .item.active { background-color: #34495e; border-left: 4px solid #3498db; font-weight: bold; }
+        .badge { background: #e74c3c; color: white; border-radius: 50%; padding: 2px 8px; font-size: 11px; font-weight: bold; }
+        
+        .create-btn { background-color: #27ae60; color: white; border: none; padding: 10px; margin: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .create-btn:hover { background-color: #2ecc71; }
+        .logout-btn { background-color: #e74c3c; color: white; text-align: center; padding: 15px; text-decoration: none; font-weight: bold; transition: 0.2s; margin-top: auto;}
+        
+        .chat-area { flex-grow: 1; display: flex; flex-direction: column; background: white; }
+        .chat-header { padding: 20px; border-bottom: 1px solid #ddd; background: #fafafa; font-weight: bold; color: #333; font-size: 20px; display: flex; justify-content: space-between; align-items: center; }
+        
+        #chat-box { flex-grow: 1; padding: 20px; overflow-y: auto; background-color: #fff; }
+        
+        .message-row { display: flex; align-items: flex-start; margin-bottom: 20px; }
+        .message-content-wrapper { display: flex; flex-direction: column; }
+        .message-sender { font-weight: bold; color: #2c3e50; font-size: 14px; margin-bottom: 3px; }
+        .message-time { font-size: 11px; color: #95a5a6; margin-left: 8px; font-weight: normal; }
+        .message-text { color: #333; line-height: 1.4; }
+        
+        .input-area { padding: 20px; background-color: #f9f9f9; border-top: 1px solid #ddd; display: flex; flex-direction: column; gap: 5px; }
+        .input-controls { display: flex; gap: 10px; width: 100%; align-items: center;}
+        
+        /* Attachment Button Styling */
+        #attach-btn { background: #95a5a6; color: white; border: none; border-radius: 50%; width: 45px; height: 45px; cursor: pointer; font-size: 20px; display: flex; justify-content: center; align-items: center; transition: 0.2s; }
+        #attach-btn:hover { background: #7f8c8d; }
+        #chat-file-input { display: none; }
+        
+        #message-input { flex-grow: 1; padding: 15px; border: 1px solid #ccc; border-radius: 25px; outline: none; font-size: 15px; }
+        #send-btn { padding: 12px 25px; background-color: #3498db; color: white; border: none; border-radius: 25px; cursor: pointer; font-weight: bold; font-size: 15px; }
+        #send-btn:disabled, #attach-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        #typing-indicator { color: #7f8c8d; font-size: 13px; font-style: italic; min-height: 15px; margin-left: 10px; animation: pulse 1.5s infinite; display: none;}
+        @keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
+
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100;}
+        .modal-content { background: white; width: 350px; margin: 100px auto; padding: 25px; border-radius: 8px; color: #2c3e50; }
+        .modal-content input[type="text"] { width: 100%; padding: 10px; margin-bottom: 15px; box-sizing: border-box; }
+        
+        .action-btn { padding: 8px 12px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: bold; margin-left: 5px; color: white; }
+        .btn-warning { background-color: #f39c12; }
+        .btn-danger { background-color: #e74c3c; }
+        #toast-container { position: fixed; top: 20px; right: 20px; z-index: 1000; }
+        
+        input[type="file"].hidden-file { display: none; }
+        .custom-file-upload { display: inline-block; padding: 4px 10px; cursor: pointer; background: #34495e; border-radius: 4px; font-size: 12px; margin-top: 5px;}
+        .custom-file-upload:hover { background: #2c3e50; }
+    </style>
+</head>
+<body>
+    
+    <div id="toast-container"></div>
+
+    <div class="sidebar">
+        <div class="sidebar-header">
+            {% set my_avatar = url_for('static', filename='uploads/' + current_user.profile_pic) if current_user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + current_user.username + '&background=random' %}
+            <img src="{{ my_avatar }}" class="sidebar-profile-pic">
+            <div style="font-size: 18px; font-weight: bold;">{{ current_user.username }}</div>
+            
+            <form action="/upload_profile" method="POST" enctype="multipart/form-data" id="upload-form">
+                <label class="custom-file-upload">
+                    <input type="file" name="file" class="hidden-file" onchange="document.getElementById('upload-form').submit();" accept="image/*">
+                    Change Photo
+                </label>
+            </form>
+        </div>
+        
+        <div class="section-title">Direct Messages</div>
+        <div id="dm-list">
+            {% for user in users %}
+                <div class="item" id="nav-dm-{{ user.id }}" onclick="openChat('dm', {{ user.id }}, '{{ user.username }}')">
+                    <div style="display: flex; align-items: center;">
+                        {% set avatar = url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=random' %}
+                        <img src="{{ avatar }}" class="profile-pic" style="width: 25px; height: 25px; border-width: 1px;">
+                        <span>{{ user.username }}</span>
+                    </div>
+                    <span class="badge" id="badge-dm-{{ user.id }}" style="display: none;">0</span>
+                </div>
+            {% endfor %}
+        </div>
+
+        <div class="section-title">Group Chats</div>
+        <div id="group-list">
+            {% for group in groups %}
+                <div class="item" id="nav-group-{{ group.id }}" onclick="openChat('group', {{ group.id }}, '{{ group.name }}')">
+                    <span># {{ group.name }}</span>
+                    <span class="badge" id="badge-group-{{ group.id }}" style="display: none;">0</span>
+                </div>
+            {% endfor %}
+        </div>
+        
+        <button class="create-btn" onclick="document.getElementById('groupModal').style.display='block'">+ New Group</button>
+        <a href="/logout" class="logout-btn">Logout</a>
+    </div>
+
+    <div class="chat-area">
+        <div class="chat-header">
+            <span id="chat-title">Select a chat to begin</span>
+            <div id="header-actions"></div>
+        </div>
+        <div id="chat-box"></div>
+        <div class="input-area">
+            <div id="typing-indicator"></div>
+            <div class="input-controls">
+                <button id="attach-btn" onclick="document.getElementById('chat-file-input').click();" disabled>📎</button>
+                <input type="file" id="chat-file-input" onchange="uploadChatFile(this)">
+                
+                <input type="text" id="message-input" placeholder="Type your message here..." disabled>
+                <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="groupModal" class="modal">
+        <div class="modal-content">
+            <h3 style="margin-top: 0;">Create New Group</h3>
+            <form action="/create_group" method="POST">
+                <input type="text" name="group_name" placeholder="Group Name" required>
+                <div id="modal-users-list" style="max-height: 150px; overflow-y: auto; border: 1px solid #ecf0f1; padding: 10px; margin-bottom: 15px;">
+                    {% for user in users %}
+                        <div class="user-checkbox" id="checkbox-{{ user.id }}">
+                            <label><input type="checkbox" name="members" value="{{ user.id }}"> {{ user.username }}</label>
+                        </div>
+                    {% endfor %}
+                </div>
+                <button type="submit" style="background: #3498db; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer;">Create</button>
+                <button type="button" onclick="document.getElementById('groupModal').style.display='none'" style="background: #e74c3c; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; float: right;">Cancel</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="participantsModal" class="modal">
+        <div class="modal-content">
+            <h3 style="margin-top: 0;">Group Participants</h3>
+            <ul id="participants-list" style="list-style-type: none; padding: 0; margin-bottom: 20px; max-height: 200px; overflow-y: auto;"></ul>
+            <button type="button" onclick="document.getElementById('participantsModal').style.display='none'" style="background: #e74c3c; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; width: 100%;">Close</button>
+        </div>
+    </div>
+
+    <script>
+        const userAvatars = {
+            {% for user in user_dict.values() %}
+                {{ user.id }}: "{{ url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=random' }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+        };
+    </script>
+
+    <script>
+        const socket = io();
+        let currentChatType = null;
+        let currentChatId = null;
+        let hideTypingTimer; 
+        const myUserId = {{ current_user.id }}; 
+        const renderedMessages = new Set();
+
+        socket.emit('register_user');
+
+        function showToast(title, message) {
+            const toast = document.createElement('div');
+            toast.style = "background: #2c3e50; color: white; padding: 15px 20px; border-radius: 8px; margin-bottom: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); font-size: 14px; border-left: 5px solid #3498db; cursor: pointer; min-width: 200px;";
+            toast.innerHTML = `<strong style="display:block; margin-bottom:5px; color:#3498db;">${title}</strong>${message}`;
+            toast.onclick = () => toast.remove();
+            document.getElementById('toast-container').appendChild(toast);
+            setTimeout(() => { if(toast) toast.remove(); }, 4500);
+        }
+
+        // NEW: SMART HTML RENDERER FOR FILES
+        function buildMessageHTML(senderId, senderName, content, timestamp, fileUrl=null, fileType=null, fileName=null) {
+            const avatarUrl = userAvatars[senderId] || `https://ui-avatars.com/api/?name=${senderName}&background=random`;
+            
+            let textHtml = content ? `<span class="message-text">${content}</span>` : '';
+            let fileHtml = '';
+            
+            if (fileUrl) {
+                if (fileType === 'image') {
+                    fileHtml = `<img src="${fileUrl}" style="max-width: 250px; border-radius: 8px; margin-top: 5px; border: 1px solid #ddd;">`;
+                } else if (fileType === 'video') {
+                    fileHtml = `<video controls style="max-width: 300px; border-radius: 8px; margin-top: 5px; border: 1px solid #ddd;"><source src="${fileUrl}"></video>`;
+                } else if (fileType === 'audio') {
+                    fileHtml = `<audio controls style="margin-top: 5px; height: 35px;"><source src="${fileUrl}"></audio>`;
+                } else {
+                    fileHtml = `<a href="${fileUrl}" target="_blank" download="${fileName}" style="background: #34495e; color: white; padding: 10px 15px; border-radius: 5px; text-decoration: none; display: inline-block; margin-top: 5px; font-size: 13px;">📎 Download: ${fileName}</a>`;
+                }
+            }
+
+            return `
+                <div class="message-row">
+                    <img src="${avatarUrl}" class="profile-pic">
+                    <div class="message-content-wrapper">
+                        <div class="message-sender">${senderName} <span class="message-time">${timestamp}</span></div>
+                        ${textHtml}
+                        ${fileHtml}
+                    </div>
+                </div>`;
+        }
+
+        socket.on('new_user_joined', function(newUser) {
+            if (newUser.id !== myUserId) {
+                userAvatars[newUser.id] = `https://ui-avatars.com/api/?name=${newUser.username}&background=random`;
+                const dmList = document.getElementById('dm-list');
+                if (!document.getElementById('nav-dm-' + newUser.id)) {
+                    dmList.innerHTML += `
+                        <div class="item" id="nav-dm-${newUser.id}" onclick="openChat('dm', ${newUser.id}, '${newUser.username}')">
+                            <div style="display: flex; align-items: center;">
+                                <img src="${userAvatars[newUser.id]}" class="profile-pic" style="width: 25px; height: 25px; border-width: 1px;">
+                                <span>${newUser.username}</span>
+                            </div>
+                            <span class="badge" id="badge-dm-${newUser.id}" style="display: none;">0</span>
+                        </div>`;
+                }
+                const modalList = document.getElementById('modal-users-list');
+                if (!document.getElementById('checkbox-' + newUser.id)) {
+                    modalList.innerHTML += `
+                        <div class="user-checkbox" id="checkbox-${newUser.id}">
+                            <label><input type="checkbox" name="members" value="${newUser.id}"> ${newUser.username}</label>
+                        </div>`;
+                }
+            }
+        });
+
+        socket.on('new_group', function(group) {
+            const groupList = document.getElementById('group-list');
+            groupList.innerHTML += `
+                <div class="item" id="nav-group-${group.id}" onclick="openChat('group', ${group.id}, '${group.name}')">
+                    <span># ${group.name}</span>
+                    <span class="badge" id="badge-group-${group.id}" style="display: none;">0</span>
+                </div>`;
+            showToast("Added to Group", `You were added to # ${group.name}`);
+        });
+
+        socket.on('show_participants', function(data) {
+            const list = document.getElementById('participants-list');
+            list.innerHTML = '';
+            data.members.forEach(member => {
+                list.innerHTML += `<li style="padding: 8px 0; border-bottom: 1px solid #eee; color: #34495e; font-weight: bold;">@ ${member}</li>`;
+            });
+            document.getElementById('participantsModal').style.display = 'block';
+        });
+
+        function viewParticipants() {
+            if (currentChatType === 'group' && currentChatId) {
+                socket.emit('get_participants', { group_id: currentChatId });
+            }
+        }
+
+        function leaveGroup() {
+            if (currentChatType === 'group' && currentChatId) {
+                if (confirm("Are you sure you want to leave this group?")) {
+                    window.location.href = '/leave_group/' + currentChatId;
+                }
+            }
+        }
+
+        function openChat(type, id, name) {
+            currentChatType = type;
+            currentChatId = id;
+            renderedMessages.clear();
+            
+            document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
+            const activeItem = document.getElementById('nav-' + type + '-' + id);
+            if (activeItem) activeItem.classList.add('active');
+            
+            const badge = document.getElementById('badge-' + type + '-' + id);
+            if (badge) { badge.innerText = '0'; badge.style.display = 'none'; }
+            
+            document.getElementById('chat-title').innerText = (type === 'dm' ? '@ ' : '# ') + name;
+            
+            const headerActions = document.getElementById('header-actions');
+            if (type === 'group') {
+                headerActions.innerHTML = `
+                    <button class="action-btn btn-warning" onclick="viewParticipants()">Participants</button>
+                    <button class="action-btn btn-danger" onclick="leaveGroup()">Leave Group</button>`;
+            } else {
+                headerActions.innerHTML = '';
+            }
+
+            document.getElementById('chat-box').innerHTML = ''; 
+            document.getElementById('message-input').disabled = false;
+            document.getElementById('send-btn').disabled = false;
+            document.getElementById('attach-btn').disabled = false; // Turn on paperclip
+            document.getElementById('message-input').focus();
+
+            socket.emit('join_chat', { type: type, id: id });
+        }
+
+        socket.on('load_history', function(history) {
+            const chatBox = document.getElementById('chat-box');
+            history.forEach(msg => {
+                renderedMessages.add(msg.msg_id);
+                chatBox.innerHTML += buildMessageHTML(msg.sender_id, msg.sender, msg.content, msg.timestamp, msg.file_url, msg.file_type, msg.file_name);
+            });
+            chatBox.scrollTop = chatBox.scrollHeight;
+        });
+
+        socket.on('user_typing', function(data) {
+            const indicator = document.getElementById('typing-indicator');
+            indicator.style.display = 'block';
+            indicator.innerText = `${data.username} is typing...`;
+            clearTimeout(hideTypingTimer);
+            hideTypingTimer = setTimeout(() => { indicator.style.display = 'none'; }, 2000); 
+        });
+
+        socket.on('receive_message', function(data) {
+            if (renderedMessages.has(data.msg_id)) return;
+
+            let shouldDisplay = false;
+            if (data.type === 'dm' && currentChatType === 'dm') {
+                if (data.sender_id === currentChatId || data.sender_id === myUserId) shouldDisplay = true;
+            } else if (data.type === 'group' && currentChatType === 'group') {
+                if (data.group_id === currentChatId) shouldDisplay = true;
+            }
+
+            if (shouldDisplay) {
+                renderedMessages.add(data.msg_id);
+                const chatBox = document.getElementById('chat-box');
+                chatBox.innerHTML += buildMessageHTML(data.sender_id, data.username, data.message, data.timestamp, data.file_url, data.file_type, data.file_name);
+                chatBox.scrollTop = chatBox.scrollHeight; 
+                document.getElementById('typing-indicator').style.display = 'none';
+            } 
+            else if (data.sender_id !== myUserId) {
+                let msgPreview = data.file_name ? `Sent an attachment: ${data.file_name}` : data.message;
+                let title = data.type === 'dm' ? `Message from @${data.username}` : `New in #${data.group_name}`;
+                showToast(title, msgPreview);
+                
+                const targetId = data.type === 'dm' ? data.sender_id : data.group_id;
+                const badge = document.getElementById('badge-' + data.type + '-' + targetId);
+                if (badge) {
+                    badge.innerText = (parseInt(badge.innerText) || 0) + 1;
+                    badge.style.display = 'inline-block';
+                }
+            }
+        });
+
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const messageText = input.value;
+            if (messageText.trim() !== '' && currentChatId) {
+                socket.emit('send_message', { type: currentChatType, id: currentChatId, message: messageText });
+                input.value = ''; 
+                document.getElementById('typing-indicator').style.display = 'none';
+            }
+        }
+        
+        // NEW: AJAX FILE UPLOADER
+        function uploadChatFile(input) {
+            if (input.files.length === 0 || !currentChatId) return;
+            
+            const file = input.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('chat_type', currentChatType);
+            formData.append('chat_id', currentChatId);
+            
+            // Show user it's uploading so they don't spam it
+            document.getElementById('typing-indicator').style.display = 'block';
+            document.getElementById('typing-indicator').innerText = `Uploading ${file.name}...`;
+
+            fetch('/upload_chat_file', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('typing-indicator').style.display = 'none';
+                if (!data.success) alert("Failed to upload file.");
+            })
+            .catch(error => {
+                document.getElementById('typing-indicator').style.display = 'none';
+                console.error('Error:', error);
+            });
+            
+            input.value = ''; // Reset the input
+        }
+        
+        document.getElementById("message-input").addEventListener("input", function() {
+            if (currentChatId) socket.emit('typing', { type: currentChatType, id: currentChatId });
+        });
+
+        document.getElementById("message-input").addEventListener("keypress", function(event) {
+            if (event.key === "Enter") sendMessage();
+        });
+    </script>
+</body>
+</html>
