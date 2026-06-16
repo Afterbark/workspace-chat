@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Workspace Chat</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="apple-touch-icon" href="/static/icon.svg">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         :root {
@@ -220,6 +223,45 @@
         .search-hit .sh-text { margin-top: 3px; font-size: 14px; }
         .search-empty { color: var(--text-soft); text-align: center; padding: 24px; }
 
+        /* pinned banner */
+        #pinned-banner { display: none; background: var(--panel); border-bottom: 1px solid var(--border);
+            padding: 8px 18px; font-size: 13px; color: var(--text); align-items: center; gap: 10px; }
+        #pinned-banner .pin-ic { color: var(--accent); }
+        #pinned-banner .pin-body { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+        #pinned-banner .pin-count { color: var(--text-soft); font-weight: 600; }
+
+        /* forwarded tag + link preview card */
+        .fwd-tag { font-size: 11px; color: var(--text-soft); font-style: italic; margin-bottom: 2px; display: block; }
+        .message-row.mine .fwd-tag { color: rgba(255,255,255,.8); }
+        .link-card { display: block; margin-top: 6px; border: 1px solid var(--border); border-radius: 10px;
+            overflow: hidden; text-decoration: none; color: inherit; max-width: 320px; background: var(--panel); }
+        .message-row.mine .link-card { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.25); }
+        .link-card img { width: 100%; max-height: 160px; object-fit: cover; display: block; }
+        .link-card .lc-body { padding: 8px 10px; }
+        .link-card .lc-title { font-weight: 700; font-size: 13px; }
+        .link-card .lc-desc { font-size: 12px; color: var(--text-soft); margin-top: 2px; max-height: 32px; overflow: hidden; }
+        .message-row.mine .link-card .lc-desc { color: rgba(255,255,255,.8); }
+
+        /* group settings block in participants modal */
+        .group-settings { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+        .group-settings img, .group-settings .gs-ph { width: 56px; height: 56px; border-radius: 50%; object-fit: cover;
+            background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; flex-shrink: 0; }
+        .group-settings .gs-name { flex: 1; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; background: var(--bg); color: var(--text); }
+
+        /* forward picker */
+        #forward-list { max-height: 50vh; overflow-y: auto; margin-top: 10px; }
+        .fwd-target { padding: 10px 12px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+        .fwd-target:hover { background: var(--bg); }
+        .fwd-target img, .fwd-target .fwd-ic { width: 34px; height: 34px; border-radius: 50%; object-fit: cover;
+            background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: 700; }
+
+        .settings-row { margin-bottom: 16px; }
+        .settings-row label { display: block; font-size: 12px; font-weight: 700; color: var(--text-soft); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+        .settings-row .row-flex { display: flex; gap: 8px; }
+        .settings-msg { font-size: 13px; margin-top: 6px; min-height: 16px; }
+        .settings-msg.ok { color: var(--green); }
+        .settings-msg.err { color: var(--danger); }
+
         .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 90; }
         #lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 500; align-items: center; justify-content: center; }
         #lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 8px; }
@@ -254,6 +296,7 @@
                     </label>
                 </form>
             </div>
+            <button class="icon-btn" title="Settings" onclick="openSettings()">&#9881;</button>
             <button class="icon-btn" id="theme-btn" title="Toggle theme" onclick="toggleTheme()">&#127769;</button>
         </div>
 
@@ -282,7 +325,13 @@
             <div id="group-list">
                 {% for group in groups %}
                     <div class="item chat-nav" id="nav-group-{{ group.id }}" data-name="{{ group.name|lower }}" onclick="openChat('group', {{ group.id }}, '{{ group.name }}')">
-                        <div class="group-ic">#</div>
+                        <span class="avatar-wrap gav" id="gav-{{ group.id }}">
+                            {% if group.photo and group.photo not in ['default', None] %}
+                                <img src="{{ group.photo }}" class="profile-pic" data-uname="{{ group.name }}" onerror="avatarFallback(this)">
+                            {% else %}
+                                <div class="group-ic">#</div>
+                            {% endif %}
+                        </span>
                         <span class="name">{{ group.name }}</span>
                         <span class="badge" id="badge-group-{{ group.id }}" style="{{ '' if group_unread[group.id] > 0 else 'display:none;' }}">{{ group_unread[group.id] }}</span>
                     </div>
@@ -304,6 +353,12 @@
                 <div class="h-sub" id="chat-subtitle"></div>
             </div>
             <div id="header-actions"></div>
+        </div>
+
+        <div id="pinned-banner">
+            <span class="pin-ic">&#128204;</span>
+            <span class="pin-body" id="pinned-body" onclick="scrollToPinned()"></span>
+            <span class="pin-count" id="pinned-count"></span>
         </div>
 
         <div id="chat-box">
@@ -354,13 +409,62 @@
 
     <div id="participantsModal" class="modal">
         <div class="modal-content">
-            <h3>Group Participants</h3>
+            <h3>Group Settings</h3>
+            <div class="group-settings">
+                <span id="gs-photo" class="gs-ph">#</span>
+                <input type="text" id="gs-name" class="gs-name" placeholder="Group name">
+                <button class="modal-btn primary" onclick="saveGroupName()">Save</button>
+            </div>
+            <form action="/upload_group_photo" method="POST" enctype="multipart/form-data" id="group-photo-form" style="margin-bottom:14px;">
+                <input type="hidden" name="group_id" id="gs-group-id">
+                <label class="photo-link" style="cursor:pointer;">
+                    <input type="file" name="file" style="display:none;" accept="image/*" onchange="document.getElementById('group-photo-form').submit();">
+                    Change group photo
+                </label>
+            </form>
             <ul id="participants-list"></ul>
             <div class="add-block">
                 <div class="lbl">Add people</div>
                 <div class="add-row" id="add-participant-row"></div>
             </div>
             <button type="button" class="modal-btn ghost" style="width:100%; margin-top:16px;" onclick="document.getElementById('participantsModal').style.display='none'">Close</button>
+        </div>
+    </div>
+
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <h3>Account Settings</h3>
+            <div class="settings-row">
+                <label>Username</label>
+                <div class="row-flex">
+                    <input type="text" id="set-username" style="flex:1; margin:0;">
+                    <button class="modal-btn primary" onclick="saveUsername()">Save</button>
+                </div>
+                <div class="settings-msg" id="username-msg"></div>
+            </div>
+            <div class="settings-row">
+                <label>Change password</label>
+                <input type="password" id="set-current-pw" placeholder="Current password" style="margin-bottom:8px;">
+                <input type="password" id="set-new-pw" placeholder="New password (8+, 1 capital, 1 number)" style="margin:0;">
+                <div class="row-flex" style="margin-top:8px;">
+                    <button class="modal-btn primary" onclick="savePassword()">Update password</button>
+                </div>
+                <div class="settings-msg" id="password-msg"></div>
+            </div>
+            <div class="settings-row">
+                <label>Notifications</label>
+                <button class="modal-btn ghost" id="enable-push-btn" onclick="enablePush()">Enable background push notifications</button>
+                <div class="settings-msg" id="push-msg"></div>
+            </div>
+            <button type="button" class="modal-btn ghost" style="width:100%;" onclick="document.getElementById('settingsModal').style.display='none'">Close</button>
+        </div>
+    </div>
+
+    <div id="forwardModal" class="modal">
+        <div class="modal-content">
+            <h3>Forward to...</h3>
+            <div id="forward-list"></div>
+            <button type="button" class="modal-btn ghost" style="width:100%; margin-top:12px;" onclick="document.getElementById('forwardModal').style.display='none'">Cancel</button>
         </div>
     </div>
 
@@ -379,12 +483,18 @@
                 {{ user.id }}: "{{ user.profile_pic if user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=2563eb&color=fff') }}"{% if not loop.last %},{% endif %}
             {% endfor %}
         };
+        const groupPhotos = {
+            {% for group in groups %}
+                {{ group.id }}: "{{ group.photo if (group.photo and group.photo not in ['default', None]) else '' }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+        };
+        const VAPID_PUBLIC_KEY = "{{ vapid_public_key }}";
     </script>
 
     <script>
         const socket = io();
         const myUserId = {{ current_user.id }};
-        const myUsername = "{{ current_user.username }}";
+        let myUsername = "{{ current_user.username }}";
         const REACT_EMOJIS = ['👍','❤️','😂','😮','😢','🎉'];
 
         let currentChatType = null, currentChatId = null;
@@ -489,6 +599,15 @@
             return `<a class="file-chip" href="${fileUrl}" target="_blank" download="${escapeHtml(fileName)}">&#128206; ${escapeHtml(fileName)}</a>`;
         }
 
+        function buildPreviewHtml(p) {
+            if (!p) return '';
+            const img = p.image ? `<img src="${escapeHtml(p.image)}" onerror="this.style.display='none'">` : '';
+            const title = p.title ? `<div class="lc-title">${escapeHtml(p.title)}</div>` : '';
+            const desc = p.description ? `<div class="lc-desc">${escapeHtml(p.description)}</div>` : '';
+            if (!title && !img) return '';
+            return `<a class="link-card" href="${escapeHtml(p.url)}" target="_blank" rel="noopener">${img}<div class="lc-body">${title}${desc}</div></a>`;
+        }
+
         function makeMessageEl(msg) {
             const mine = msg.sender_id === myUserId;
             const row = document.createElement('div');
@@ -496,6 +615,7 @@
             row.dataset.msgId = msg.msg_id;
             row.dataset.senderId = msg.sender_id;
             row.dataset.ts = msg.ts_iso || '';
+            row.dataset.pinned = msg.pinned ? '1' : '';
             const text = (msg.content !== undefined ? msg.content : msg.message) || '';
             row.dataset.content = text;
 
@@ -511,6 +631,8 @@
             const textHtml = text ? `<div class="text">${highlightMentions(escapeHtml(text))}</div>` : '';
             const fileHtml = buildFileHtml(msg.file_url, msg.file_type, msg.file_name);
             const editedTag = msg.edited ? ' <span class="edited-tag">(edited)</span>' : '';
+            const fwdTag = msg.forwarded ? '<span class="fwd-tag">↪ Forwarded</span>' : '';
+            const previewHtml = msg.preview ? buildPreviewHtml(msg.preview) : '';
 
             let replyHtml = '';
             if (msg.reply_to) {
@@ -521,6 +643,8 @@
                 <div class="msg-actions">
                     <button title="React" onclick="openReactPalette(${msg.msg_id}, this)">😀</button>
                     <button title="Reply" onclick="startReply(${msg.msg_id})">↩</button>
+                    <button title="Forward" onclick="openForward(${msg.msg_id})">⤴</button>
+                    <button title="Pin / unpin" onclick="togglePin(${msg.msg_id}, this)">📌</button>
                     ${mine ? `<button title="Edit" onclick="startEdit(${msg.msg_id})">✎</button>
                               <button title="Delete" onclick="deleteMessage(${msg.msg_id})">🗑</button>` : ''}
                 </div>`;
@@ -529,7 +653,7 @@
                 ${avatar}
                 <div class="msg-col">
                     ${replyHtml}
-                    <div class="bubble">${senderHtml}${textHtml}${fileHtml}<span class="time">${msg.timestamp || ''}${editedTag}</span></div>
+                    <div class="bubble">${fwdTag}${senderHtml}${textHtml}${fileHtml}${previewHtml}<span class="time">${msg.timestamp || ''}${editedTag}</span></div>
                     <div class="reactions"></div>
                 </div>
                 ${actions}`;
@@ -688,6 +812,185 @@
             renderReactions(row, data.reactions || []);
         });
 
+        /* ---------- pinned messages ---------- */
+        let pinnedList = [];
+        function renderPinnedBanner() {
+            const banner = document.getElementById('pinned-banner');
+            if (!pinnedList.length) { banner.style.display = 'none'; return; }
+            const latest = pinnedList[pinnedList.length - 1];
+            document.getElementById('pinned-body').innerHTML = `<b>${escapeHtml(latest.sender)}:</b> ${escapeHtml(latest.snippet || '[attachment]')}`;
+            document.getElementById('pinned-count').textContent = pinnedList.length > 1 ? `${pinnedList.length} pinned` : '';
+            banner.style.display = 'flex';
+        }
+        function scrollToPinned() {
+            if (!pinnedList.length) return;
+            const row = findRow(pinnedList[pinnedList.length - 1].msg_id);
+            if (row) { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.style.transition = 'background .3s'; row.style.background = 'var(--accent-soft)'; setTimeout(() => row.style.background = '', 900); }
+        }
+        function togglePin(msgId, btn) {
+            const row = findRow(msgId);
+            const isPinned = row && row.dataset.pinned === '1';
+            socket.emit(isPinned ? 'unpin_message' : 'pin_message', { message_id: msgId });
+        }
+        socket.on('message_pinned', function(data) {
+            const row = findRow(data.msg_id);
+            if (row) row.dataset.pinned = data.pinned ? '1' : '';
+            pinnedList = pinnedList.filter(p => p.msg_id !== data.msg_id);
+            if (data.pinned && data.pin) pinnedList.push(data.pin);
+            renderPinnedBanner();
+        });
+
+        /* ---------- link previews (async) ---------- */
+        socket.on('link_preview', function(data) {
+            const row = findRow(data.msg_id); if (!row) return;
+            const bubble = row.querySelector('.bubble'); if (!bubble || bubble.querySelector('.link-card')) return;
+            const html = buildPreviewHtml(data.preview);
+            if (!html) return;
+            const time = bubble.querySelector('.time');
+            if (time) time.insertAdjacentHTML('beforebegin', html);
+            else bubble.insertAdjacentHTML('beforeend', html);
+        });
+
+        /* ---------- forwarding ---------- */
+        let forwardMsgId = null;
+        function openForward(msgId) {
+            forwardMsgId = msgId;
+            const list = document.getElementById('forward-list');
+            list.innerHTML = '';
+            document.querySelectorAll('#dm-list .chat-nav').forEach(nav => {
+                const id = parseInt(nav.id.replace('nav-dm-', ''));
+                const name = nav.querySelector('.name').textContent;
+                const t = document.createElement('div');
+                t.className = 'fwd-target';
+                t.innerHTML = `<img src="${avatarFor(id, name)}" data-uname="${escapeHtml(name)}" onerror="avatarFallback(this)"><span>${escapeHtml(name)}</span>`;
+                t.onclick = () => doForward('dm', id, name);
+                list.appendChild(t);
+            });
+            document.querySelectorAll('#group-list .chat-nav').forEach(nav => {
+                const id = parseInt(nav.id.replace('nav-group-', ''));
+                const name = nav.querySelector('.name').textContent;
+                const t = document.createElement('div');
+                t.className = 'fwd-target';
+                t.innerHTML = `<span class="fwd-ic">#</span><span>${escapeHtml(name)}</span>`;
+                t.onclick = () => doForward('group', id, name);
+                list.appendChild(t);
+            });
+            document.getElementById('forwardModal').style.display = 'block';
+        }
+        function doForward(type, id, name) {
+            if (forwardMsgId == null) return;
+            socket.emit('forward_message', { message_id: forwardMsgId, target_type: type, target_id: id });
+            document.getElementById('forwardModal').style.display = 'none';
+            showToast('Forwarded', `Message sent to ${type === 'group' ? '# ' : ''}${name}`);
+            forwardMsgId = null;
+        }
+
+        /* ---------- group + username updates ---------- */
+        socket.on('group_updated', function(data) {
+            groupPhotos[data.id] = (data.photo && data.photo !== 'default') ? data.photo : '';
+            const nav = document.getElementById('nav-group-' + data.id);
+            if (nav) {
+                nav.querySelector('.name').textContent = data.name;
+                nav.dataset.name = data.name.toLowerCase();
+                const gav = document.getElementById('gav-' + data.id);
+                if (gav) gav.innerHTML = groupPhotos[data.id]
+                    ? `<img src="${groupPhotos[data.id]}" class="profile-pic" data-uname="${escapeHtml(data.name)}" onerror="avatarFallback(this)">`
+                    : '<div class="group-ic">#</div>';
+            }
+            if (currentChatType === 'group' && currentChatId === data.id) {
+                document.getElementById('chat-title').textContent = '# ' + data.name;
+                applyGroupHeaderPhoto(data.id, data.name);
+            }
+        });
+        socket.on('user_renamed', function(data) {
+            if (data.id === myUserId) { myUsername = data.username; return; }
+            const nav = document.getElementById('nav-dm-' + data.id);
+            if (nav) { nav.querySelector('.name').textContent = data.username; nav.dataset.name = data.username.toLowerCase(); }
+            const cb = document.querySelector('#checkbox-' + data.id + ' label');
+            if (cb) cb.childNodes[cb.childNodes.length - 1].textContent = ' ' + data.username;
+            if (currentChatType === 'dm' && currentChatId === data.id) document.getElementById('chat-title').textContent = data.username;
+        });
+
+        function applyGroupHeaderPhoto(id, name) {
+            const headerAvatar = document.getElementById('header-avatar');
+            if (groupPhotos[id]) { headerAvatar.dataset.uname = name; headerAvatar.src = groupPhotos[id]; headerAvatar.style.display = ''; }
+            else headerAvatar.style.display = 'none';
+        }
+
+        /* ---------- account settings ---------- */
+        function openSettings() {
+            document.getElementById('set-username').value = myUsername;
+            document.getElementById('username-msg').textContent = '';
+            document.getElementById('password-msg').textContent = '';
+            document.getElementById('set-current-pw').value = '';
+            document.getElementById('set-new-pw').value = '';
+            updatePushButton();
+            document.getElementById('settingsModal').style.display = 'block';
+        }
+        function postForm(url, fields) {
+            const body = new URLSearchParams(fields);
+            return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }).then(r => r.json().then(j => ({ ok: r.ok, j })));
+        }
+        function saveUsername() {
+            const val = document.getElementById('set-username').value.trim();
+            const msg = document.getElementById('username-msg');
+            postForm('/update_username', { username: val }).then(({ ok, j }) => {
+                if (ok && j.success) { myUsername = j.username; msg.className = 'settings-msg ok'; msg.textContent = 'Username updated.'; }
+                else { msg.className = 'settings-msg err'; msg.textContent = j.error || 'Failed.'; }
+            });
+        }
+        function savePassword() {
+            const msg = document.getElementById('password-msg');
+            postForm('/update_password', {
+                current_password: document.getElementById('set-current-pw').value,
+                new_password: document.getElementById('set-new-pw').value
+            }).then(({ ok, j }) => {
+                if (ok && j.success) { msg.className = 'settings-msg ok'; msg.textContent = 'Password updated.'; document.getElementById('set-current-pw').value = ''; document.getElementById('set-new-pw').value = ''; }
+                else { msg.className = 'settings-msg err'; msg.textContent = j.error || 'Failed.'; }
+            });
+        }
+        function saveGroupName() {
+            const val = document.getElementById('gs-name').value.trim();
+            if (val && participantsGroupId) socket.emit('rename_group', { group_id: participantsGroupId, name: val });
+        }
+
+        /* ---------- web push ---------- */
+        let swRegistration = null;
+        async function registerServiceWorker() {
+            if (!('serviceWorker' in navigator)) return;
+            try { swRegistration = await navigator.serviceWorker.register('/sw.js', { scope: '/' }); } catch (e) { console.warn('SW failed', e); }
+        }
+        function urlB64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const raw = atob(base64); const arr = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+            return arr;
+        }
+        function updatePushButton() {
+            const btn = document.getElementById('enable-push-btn'), msg = document.getElementById('push-msg');
+            if (!('Notification' in window) || !VAPID_PUBLIC_KEY) { btn.disabled = true; btn.textContent = 'Push not supported'; return; }
+            if (Notification.permission === 'granted') { btn.textContent = 'Background notifications enabled'; }
+            else { btn.textContent = 'Enable background push notifications'; }
+            msg.textContent = '';
+        }
+        async function enablePush() {
+            const msg = document.getElementById('push-msg');
+            if (!VAPID_PUBLIC_KEY) { msg.className = 'settings-msg err'; msg.textContent = 'Push not configured on server.'; return; }
+            try {
+                const perm = await Notification.requestPermission();
+                if (perm !== 'granted') { msg.className = 'settings-msg err'; msg.textContent = 'Permission denied.'; return; }
+                if (!swRegistration) await registerServiceWorker();
+                const reg = swRegistration || await navigator.serviceWorker.ready;
+                let sub = await reg.pushManager.getSubscription();
+                if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(VAPID_PUBLIC_KEY) });
+                await fetch('/save_push_subscription', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub) });
+                msg.className = 'settings-msg ok'; msg.textContent = 'Background notifications enabled!';
+                updatePushButton();
+            } catch (e) { msg.className = 'settings-msg err'; msg.textContent = 'Could not enable push.'; console.error(e); }
+        }
+        registerServiceWorker();
+
         /* ---------- seen indicator ---------- */
         function updateSeenIndicator() {
             const old = document.getElementById('seen-indicator'); if (old) old.remove();
@@ -752,9 +1055,10 @@
         socket.on('new_group', function(group) {
             removedGroups.delete(group.id);
             if (document.getElementById('nav-group-' + group.id)) return;
+            groupPhotos[group.id] = '';
             document.getElementById('group-list').insertAdjacentHTML('beforeend', `
                 <div class="item chat-nav" id="nav-group-${group.id}" data-name="${group.name.toLowerCase()}" onclick="openChat('group', ${group.id}, '${group.name}')">
-                    <div class="group-ic">#</div>
+                    <span class="avatar-wrap gav" id="gav-${group.id}"><div class="group-ic">#</div></span>
                     <span class="name">${escapeHtml(group.name)}</span>
                     <span class="badge" id="badge-group-${group.id}" style="display:none;">0</span>
                 </div>`);
@@ -783,6 +1087,14 @@
         socket.on('show_participants', function(data) {
             participantsGroupId = data.group_id;
             renderParticipants(data.members, data.non_members);
+            // populate group settings
+            const nav = document.getElementById('nav-group-' + data.group_id);
+            const gname = nav ? nav.querySelector('.name').textContent : '';
+            document.getElementById('gs-name').value = gname;
+            document.getElementById('gs-group-id').value = data.group_id;
+            const gp = document.getElementById('gs-photo');
+            if (groupPhotos[data.group_id]) gp.outerHTML = `<img id="gs-photo" src="${groupPhotos[data.group_id]}" data-uname="${escapeHtml(gname)}" onerror="avatarFallback(this)">`;
+            else { gp.outerHTML = '<span id="gs-photo" class="gs-ph">#</span>'; }
             document.getElementById('participantsModal').style.display = 'block';
         });
         function viewParticipants() { if (currentChatType === 'group' && currentChatId) socket.emit('get_participants', { group_id: currentChatId }); }
@@ -824,7 +1136,8 @@
         function openChat(type, id, name) {
             currentChatType = type; currentChatId = id;
             renderedMessages = new Set(); oldestRenderedId = null; hasMoreOlder = false;
-            seenState = {}; groupMembers = [];
+            seenState = {}; groupMembers = []; pinnedList = [];
+            document.getElementById('pinned-banner').style.display = 'none';
             clearComposerContext(); hideMentionBox();
 
             document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
@@ -845,7 +1158,7 @@
                 subtitle.textContent = on ? 'Online' : 'Offline'; subtitle.classList.toggle('online', on);
                 headerActions.innerHTML = '';
             } else {
-                headerAvatar.style.display = 'none'; subtitle.textContent = ''; subtitle.classList.remove('online');
+                applyGroupHeaderPhoto(id, name); subtitle.textContent = ''; subtitle.classList.remove('online');
                 headerActions.innerHTML = `
                     <button class="action-btn btn-light" onclick="viewParticipants()">Participants</button>
                     <button class="action-btn btn-danger" onclick="leaveGroup()">Leave</button>`;
@@ -864,9 +1177,11 @@
             const chatBox = document.getElementById('chat-box');
             chatBox.innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
             hasMoreOlder = payload.has_more; seenState = payload.seen || {};
+            pinnedList = payload.pinned || [];
             if (payload.members) { groupMembers = payload.members; groupMemberCount = payload.member_count || payload.members.length; }
             if (currentChatType === 'group') document.getElementById('chat-subtitle').textContent = `${groupMemberCount} members`;
             payload.messages.forEach(appendMessage);
+            renderPinnedBanner();
             chatBox.scrollTop = chatBox.scrollHeight;
             updateSeenIndicator();
             socket.emit('mark_read', { type: currentChatType, id: currentChatId });
@@ -910,7 +1225,8 @@
                 appendMessage({
                     msg_id: data.msg_id, sender: data.username, sender_id: data.sender_id, content: data.message,
                     file_url: data.file_url, file_type: data.file_type, file_name: data.file_name,
-                    timestamp: data.timestamp, ts_iso: data.ts_iso, reply_to: data.reply_to, reactions: data.reactions || [], edited: data.edited
+                    timestamp: data.timestamp, ts_iso: data.ts_iso, reply_to: data.reply_to, reactions: data.reactions || [],
+                    edited: data.edited, forwarded: data.forwarded, preview: data.preview, pinned: data.pinned
                 });
                 const chatBox = document.getElementById('chat-box');
                 chatBox.scrollTop = chatBox.scrollHeight;

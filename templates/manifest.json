@@ -1,0 +1,13 @@
+{
+  "name": "Workspace Chat",
+  "short_name": "Chat",
+  "description": "Team messaging for your workspace.",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b141a",
+  "theme_color": "#2563eb",
+  "icons": [
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

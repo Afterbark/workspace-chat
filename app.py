@@ -3,7 +3,11 @@ monkey.patch_all()
 import os
 import re
 import uuid
+import json
+import ipaddress
+import socket as _socket
 import mimetypes
+from urllib.parse import urlparse
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
@@ -20,6 +24,21 @@ try:
     _CLOUDINARY_AVAILABLE = True
 except Exception:
     _CLOUDINARY_AVAILABLE = False
+
+# Optional Web Push (VAPID). Degrades gracefully if missing/unconfigured.
+try:
+    from pywebpush import webpush, WebPushException
+    from py_vapid import Vapid01
+    _PUSH_AVAILABLE = True
+except Exception:
+    _PUSH_AVAILABLE = False
+
+# Optional HTTP client used for link-preview fetching.
+try:
+    import requests as _requests
+    _REQUESTS_AVAILABLE = True
+except Exception:
+    _REQUESTS_AVAILABLE = False
 
 app = Flask(__name__)
 
@@ -59,10 +78,47 @@ if _CLOUDINARY_AVAILABLE:
         )
         USE_CLOUDINARY = True
 
+# --- WEB PUSH (VAPID) keys ---
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_CLAIM = os.environ.get('VAPID_CLAIM_EMAIL', 'mailto:admin@example.com')
+_vapid = None
+if _PUSH_AVAILABLE and VAPID_PRIVATE_KEY:
+    try:
+        _vapid = Vapid01.from_raw(VAPID_PRIVATE_KEY.encode())
+    except Exception:
+        _vapid = None
+
 db = SQLAlchemy(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
+
+# --- RATE LIMITING (in-memory; fine for a single dyno) ---
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+    limiter = Limiter(get_remote_address, app=app, storage_uri="memory://")
+except Exception:
+    limiter = None
+
+def rate_limit(spec, methods=None):
+    """Decorator that applies a Flask-Limiter limit if available, else no-op."""
+    def deco(f):
+        if not limiter:
+            return f
+        return limiter.limit(spec, methods=methods)(f)
+    return deco
+
+# --- ERROR MONITORING (optional, only if SENTRY_DSN is set) ---
+if os.environ.get('SENTRY_DSN'):
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.flask import FlaskIntegration
+        sentry_sdk.init(dsn=os.environ['SENTRY_DSN'],
+                        integrations=[FlaskIntegration()], traces_sample_rate=0.1)
+    except Exception:
+        pass
 
 # How many messages to load per "page" when opening a chat / loading older history.
 PAGE_SIZE = 30
@@ -85,6 +141,7 @@ class User(UserMixin, db.Model):
 class ChatGroup(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)
+    photo = db.Column(db.String(250), default='default')
 
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -99,6 +156,8 @@ class Message(db.Model):
     edited = db.Column(db.Boolean, default=False)
     is_deleted = db.Column(db.Boolean, default=False)
     reply_to_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=True)
+    pinned = db.Column(db.Boolean, default=False)
+    forwarded = db.Column(db.Boolean, default=False)
 
 # Tracks which user has read which message (powers "Seen" / unread counts).
 class MessageRead(db.Model):
@@ -115,6 +174,23 @@ class MessageReaction(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     emoji = db.Column(db.String(16), nullable=False)
     __table_args__ = (db.UniqueConstraint('message_id', 'user_id', 'emoji', name='uq_message_user_emoji'),)
+
+# Browser push-notification subscriptions (Web Push / VAPID).
+class PushSubscription(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    endpoint = db.Column(db.String(500), unique=True, nullable=False)
+    data = db.Column(db.Text, nullable=False)  # full subscription JSON
+
+# Cached Open Graph link previews, keyed by URL.
+class LinkPreview(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    url = db.Column(db.String(700), unique=True, nullable=False, index=True)
+    title = db.Column(db.String(400))
+    description = db.Column(db.String(700))
+    image = db.Column(db.String(700))
+    ok = db.Column(db.Boolean, default=False)
+    fetched_at = db.Column(db.DateTime, default=datetime.now)
 
 
 def safe_auto_migrate():
@@ -138,6 +214,16 @@ def safe_auto_migrate():
             to_add.append("ALTER TABLE message ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE")
         if 'reply_to_id' not in cols:
             to_add.append("ALTER TABLE message ADD COLUMN reply_to_id INTEGER")
+        if 'pinned' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN pinned BOOLEAN DEFAULT FALSE")
+        if 'forwarded' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN forwarded BOOLEAN DEFAULT FALSE")
+        try:
+            gcols = {c['name'] for c in insp.get_columns('chat_group')}
+            if 'photo' not in gcols:
+                to_add.append("ALTER TABLE chat_group ADD COLUMN photo VARCHAR(250)")
+        except Exception:
+            pass
         for stmt in to_add:
             try:
                 db.session.execute(text(stmt))
@@ -208,6 +294,9 @@ def serialize_message(m):
         'is_deleted': bool(m.is_deleted),
         'reply_to': reply_preview(m.reply_to_id),
         'reactions': get_reactions(m.id),
+        'pinned': bool(m.pinned),
+        'forwarded': bool(m.forwarded),
+        'preview': None if m.is_deleted else get_content_preview(m.content),
     }
 
 def get_seen_state(chat_type, chat_id, me_id):
@@ -269,12 +358,136 @@ def broadcast_participants(group):
         'member_count': len(members),
     }, to=f"group_{group.id}")
 
+# ---------- WEB PUSH ----------
+
+def send_push_to_user(user_id, title, body, url='/dashboard'):
+    """Send a Web Push notification to all of a user's subscriptions."""
+    if not _vapid:
+        return
+    payload = json.dumps({'title': title, 'body': (body or '')[:180], 'url': url})
+    for sub in PushSubscription.query.filter_by(user_id=user_id).all():
+        try:
+            webpush(
+                subscription_info=json.loads(sub.data),
+                data=payload,
+                vapid_private_key=_vapid,
+                vapid_claims={'sub': VAPID_CLAIM},
+                ttl=120,
+            )
+        except WebPushException as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status in (404, 410):
+                db.session.delete(sub)
+                db.session.commit()
+        except Exception:
+            pass
+
+# ---------- LINK PREVIEWS ----------
+
+URL_RE = re.compile(r'(https?://[^\s<>"\']+)')
+
+def extract_first_url(text_value):
+    if not text_value:
+        return None
+    m = URL_RE.search(text_value)
+    return m.group(1).rstrip('.,);]') if m else None
+
+def is_safe_url(url):
+    """Block non-http(s) and requests to private/loopback addresses (SSRF guard)."""
+    try:
+        p = urlparse(url)
+        if p.scheme not in ('http', 'https') or not p.hostname:
+            return False
+        infos = _socket.getaddrinfo(p.hostname, None)
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return False
+        return True
+    except Exception:
+        return False
+
+def _meta_content(html, names):
+    for name in names:
+        m = re.search(
+            r'<meta[^>]+(?:property|name)=["\']' + re.escape(name) + r'["\'][^>]*content=["\']([^"\']+)["\']',
+            html, re.IGNORECASE)
+        if not m:
+            m = re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']' + re.escape(name) + r'["\']',
+                html, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+    return None
+
+def serialize_preview(lp):
+    if not lp or not lp.ok:
+        return None
+    return {'url': lp.url, 'title': lp.title, 'description': lp.description, 'image': lp.image}
+
+def get_content_preview(content):
+    url = extract_first_url(content)
+    if not url:
+        return None
+    return serialize_preview(LinkPreview.query.filter_by(url=url).first())
+
+def fetch_link_preview(url, room, msg_id):
+    """Background task: fetch OG metadata for a URL, cache it, push to the room."""
+    if not _REQUESTS_AVAILABLE or not is_safe_url(url):
+        return
+    with app.app_context():
+        lp = LinkPreview.query.filter_by(url=url).first()
+        if lp:  # already cached
+            if lp.ok:
+                socketio.emit('link_preview', {'msg_id': msg_id, 'preview': serialize_preview(lp)}, to=room)
+            return
+        title = desc = image = None
+        ok = False
+        try:
+            resp = _requests.get(url, timeout=5, stream=True,
+                                 headers={'User-Agent': 'Mozilla/5.0 (WorkspaceChat LinkBot)'})
+            ctype = resp.headers.get('Content-Type', '')
+            if 'text/html' in ctype:
+                html = resp.raw.read(200000, decode_content=True).decode('utf-8', 'ignore')
+                title = _meta_content(html, ['og:title', 'twitter:title'])
+                if not title:
+                    tm = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
+                    title = tm.group(1).strip() if tm else None
+                desc = _meta_content(html, ['og:description', 'twitter:description', 'description'])
+                image = _meta_content(html, ['og:image', 'twitter:image'])
+                ok = bool(title or image)
+            resp.close()
+        except Exception:
+            ok = False
+        lp = LinkPreview(url=url, title=(title or '')[:400], description=(desc or '')[:700],
+                         image=(image or '')[:700], ok=ok)
+        try:
+            db.session.add(lp)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            return
+        if ok:
+            socketio.emit('link_preview', {'msg_id': msg_id, 'preview': serialize_preview(lp)}, to=room)
+
+def maybe_fetch_preview(content, room, msg_id):
+    url = extract_first_url(content)
+    if url:
+        socketio.start_background_task(fetch_link_preview, url, room, msg_id)
+
+def push_to_offline_recipients(recipient_ids, title, body):
+    """Push to recipients who currently have no active socket connection."""
+    for uid in recipient_ids:
+        if uid != current_user.id and uid not in online_users:
+            send_push_to_user(uid, title, body)
+
 
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
 @app.route('/', methods=['GET', 'POST'])
+@rate_limit("8 per minute", methods=["POST"])
 def login():
     if request.method == 'POST':
         username = request.form.get('username').strip()
@@ -290,6 +503,7 @@ def login():
     return render_template('login.html')
 
 @app.route('/register', methods=['GET', 'POST'])
+@rate_limit("5 per minute", methods=["POST"])
 def register():
     if request.method == 'POST':
         username = request.form.get('username').strip()
@@ -317,6 +531,7 @@ def register():
     return render_template('register.html')
 
 @app.route('/reset_password', methods=['GET', 'POST'])
+@rate_limit("5 per minute", methods=["POST"])
 def reset_password():
     if request.method == 'POST':
         username = request.form.get('username').strip()
@@ -348,7 +563,89 @@ def dashboard():
     dm_unread = {u.id: get_unread('dm', u.id, current_user.id) for u in all_users}
     group_unread = {g.id: get_unread('group', g.id, current_user.id) for g in user_groups}
     return render_template('dashboard.html', users=all_users, groups=user_groups,
-                           user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread)
+                           user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
+                           vapid_public_key=VAPID_PUBLIC_KEY)
+
+@app.route('/update_username', methods=['POST'])
+@login_required
+@rate_limit("10 per minute", methods=["POST"])
+def update_username():
+    new_username = (request.form.get('username') or '').strip()
+    if not new_username or len(new_username) > 150:
+        return {'error': 'Invalid username.'}, 400
+    existing = User.query.filter(func.lower(User.username) == func.lower(new_username)).first()
+    if existing and existing.id != current_user.id:
+        return {'error': 'Username already taken.'}, 400
+    current_user.username = new_username
+    db.session.commit()
+    socketio.emit('user_renamed', {'id': current_user.id, 'username': new_username})
+    return {'success': True, 'username': new_username}
+
+@app.route('/update_password', methods=['POST'])
+@login_required
+@rate_limit("6 per minute", methods=["POST"])
+def update_password():
+    current_pw = request.form.get('current_password') or ''
+    new_pw = request.form.get('new_password') or ''
+    if not check_password_hash(current_user.password, current_pw):
+        return {'error': 'Current password is incorrect.'}, 400
+    if len(new_pw) < 8 or not re.search(r"[A-Z]", new_pw) or not re.search(r"\d", new_pw):
+        return {'error': 'Password must be 8+ chars with 1 uppercase and 1 number.'}, 400
+    current_user.password = generate_password_hash(new_pw, method='pbkdf2:sha256')
+    db.session.commit()
+    return {'success': True}
+
+@app.route('/upload_group_photo', methods=['POST'])
+@login_required
+def upload_group_photo():
+    group_id = int(request.form.get('group_id'))
+    group = ChatGroup.query.get(group_id)
+    if not group or current_user not in group.members:
+        return {'error': 'Not allowed.'}, 403
+    if 'file' not in request.files:
+        return {'error': 'No file part'}, 400
+    file = request.files['file']
+    if file and file.filename != '':
+        if USE_CLOUDINARY:
+            result = cloudinary.uploader.upload(
+                file, folder="workspace_chat/groups",
+                public_id=f"group_{group_id}", overwrite=True, resource_type="image")
+            group.photo = result['secure_url']
+        else:
+            filename = secure_filename(file.filename)
+            ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'png'
+            new_filename = f"group_{group_id}.{ext}"
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], new_filename))
+            group.photo = url_for('static', filename=f'uploads/{new_filename}')
+        db.session.commit()
+        socketio.emit('group_updated', {'id': group.id, 'name': group.name, 'photo': group.photo}, to=f"group_{group.id}")
+    return redirect(url_for('dashboard'))
+
+@app.route('/save_push_subscription', methods=['POST'])
+@login_required
+def save_push_subscription():
+    sub = request.get_json(silent=True)
+    if not sub or 'endpoint' not in sub:
+        return {'error': 'Invalid subscription.'}, 400
+    existing = PushSubscription.query.filter_by(endpoint=sub['endpoint']).first()
+    if existing:
+        existing.user_id = current_user.id
+        existing.data = json.dumps(sub)
+    else:
+        db.session.add(PushSubscription(user_id=current_user.id, endpoint=sub['endpoint'], data=json.dumps(sub)))
+    db.session.commit()
+    return {'success': True}
+
+@app.route('/sw.js')
+def service_worker():
+    resp = app.response_class(render_template('sw.js'), mimetype='application/javascript')
+    resp.headers['Service-Worker-Allowed'] = '/'
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
+
+@app.route('/manifest.json')
+def manifest():
+    return app.response_class(render_template('manifest.json'), mimetype='application/manifest+json')
 
 @app.route('/upload_profile', methods=['POST'])
 @login_required
@@ -426,17 +723,21 @@ def upload_chat_file():
             'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
             'sender_id': current_user.id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
             'ts_iso': new_msg.timestamp.isoformat(), 'mentions': [],
-            'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False
+            'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
+            'pinned': False, 'forwarded': False, 'preview': None
         }
 
         if chat_type == 'dm':
             socketio.emit('receive_message', msg_packet, to=f"user_sys_{chat_id}")
+            push_to_offline_recipients([chat_id], current_user.username, f"Sent an attachment: {filename}")
         else:
             group = ChatGroup.query.get(chat_id)
             msg_packet['group_name'] = group.name
             for user in group.members:
                 if user.id != current_user.id:
                     socketio.emit('receive_message', msg_packet, to=f"user_sys_{user.id}")
+            push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
+                                       f"{current_user.username} sent an attachment")
 
         socketio.emit('receive_message', msg_packet, to=room)
 
@@ -547,10 +848,12 @@ def on_join(data):
     recent = q.offset(max(0, total - PAGE_SIZE)).limit(PAGE_SIZE).all()
     history = [serialize_message(m) for m in recent]
 
+    pinned = q.filter(Message.pinned == True, Message.is_deleted == False).all()
     payload = {
         'messages': history,
         'has_more': total > len(history),
         'seen': get_seen_state(chat_type, chat_id, current_user.id),
+        'pinned': [_pin_preview(m) for m in pinned],
     }
     if chat_type == 'group':
         group = ChatGroup.query.get(chat_id)
@@ -640,19 +943,26 @@ def handle_message(data):
         'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
         'sender_id': current_user.id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
         'ts_iso': new_msg.timestamp.isoformat(), 'mentions': mentions,
-        'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False
+        'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
+        'pinned': False, 'forwarded': False, 'preview': None
     }
 
     if chat_type == 'dm':
         emit('receive_message', msg_packet, to=f"user_sys_{chat_id}")
+        push_to_offline_recipients([chat_id], current_user.username, content)
     else:
         group = ChatGroup.query.get(chat_id)
         msg_packet['group_name'] = group.name
         for user in group.members:
             if user.id != current_user.id:
                 emit('receive_message', msg_packet, to=f"user_sys_{user.id}")
+        push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
+                                   f"{current_user.username}: {content}")
 
     emit('receive_message', msg_packet, to=room)
+
+    # Fetch a link preview in the background and push it to the room when ready.
+    maybe_fetch_preview(content, room, new_msg.id)
 
 @socketio.on('edit_message')
 def on_edit_message(data):
@@ -739,6 +1049,95 @@ def on_search(data):
             'when': m.timestamp.strftime('%b %d, %I:%M %p'),
         })
     emit('search_results', {'query': query, 'results': results})
+
+# ---------- group rename, pin, forward ----------
+
+def _can_access_message(m):
+    if not m:
+        return False
+    if m.group_id:
+        group = ChatGroup.query.get(m.group_id)
+        return bool(group and current_user in group.members)
+    return current_user.id in (m.sender_id, m.receiver_id)
+
+def _pin_preview(m):
+    sender = User.query.get(m.sender_id)
+    snippet = m.content or (f'[{m.file_type}]' if m.file_type else '')
+    return {'msg_id': m.id, 'sender': sender.username if sender else '?', 'snippet': (snippet or '')[:120]}
+
+@socketio.on('rename_group')
+def on_rename_group(data):
+    group = ChatGroup.query.get(int(data['group_id']))
+    new_name = (data.get('name') or '').strip()
+    if not group or current_user not in group.members or not new_name:
+        return
+    group.name = new_name[:150]
+    db.session.commit()
+    for u in group.members:
+        socketio.emit('group_updated', {'id': group.id, 'name': group.name, 'photo': group.photo}, to=f"user_sys_{u.id}")
+
+@socketio.on('pin_message')
+def on_pin_message(data):
+    m = Message.query.get(int(data['message_id']))
+    if not m or m.is_deleted or not _can_access_message(m):
+        return
+    m.pinned = True
+    db.session.commit()
+    socketio.emit('message_pinned', {'msg_id': m.id, 'pinned': True, 'pin': _pin_preview(m)}, to=room_for_message(m))
+
+@socketio.on('unpin_message')
+def on_unpin_message(data):
+    m = Message.query.get(int(data['message_id']))
+    if not m or not _can_access_message(m):
+        return
+    m.pinned = False
+    db.session.commit()
+    socketio.emit('message_pinned', {'msg_id': m.id, 'pinned': False}, to=room_for_message(m))
+
+@socketio.on('forward_message')
+def on_forward_message(data):
+    m = Message.query.get(int(data['message_id']))
+    if not m or m.is_deleted or not _can_access_message(m):
+        return
+    target_type = data.get('target_type')
+    target_id = int(data['target_id'])
+
+    if target_type == 'group':
+        group = ChatGroup.query.get(target_id)
+        if not group or current_user not in group.members:
+            return
+        new_msg = Message(sender_id=current_user.id, group_id=target_id, content=m.content,
+                          file_url=m.file_url, file_type=m.file_type, file_name=m.file_name, forwarded=True)
+        room = f"group_{target_id}"
+    else:
+        new_msg = Message(sender_id=current_user.id, receiver_id=target_id, content=m.content,
+                          file_url=m.file_url, file_type=m.file_type, file_name=m.file_name, forwarded=True)
+        room = dm_room(current_user.id, target_id)
+
+    db.session.add(new_msg)
+    db.session.commit()
+
+    packet = {
+        'msg_id': new_msg.id, 'username': current_user.username, 'message': new_msg.content or "",
+        'file_url': new_msg.file_url, 'file_type': new_msg.file_type, 'file_name': new_msg.file_name,
+        'type': target_type, 'group_id': target_id if target_type == 'group' else None,
+        'sender_id': current_user.id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
+        'ts_iso': new_msg.timestamp.isoformat(), 'mentions': [],
+        'reply_to': None, 'reactions': [], 'edited': False,
+        'pinned': False, 'forwarded': True, 'preview': None
+    }
+    if target_type == 'dm':
+        emit('receive_message', packet, to=f"user_sys_{target_id}")
+        push_to_offline_recipients([target_id], current_user.username, packet['message'] or 'Forwarded a message')
+    else:
+        group = ChatGroup.query.get(target_id)
+        packet['group_name'] = group.name
+        for u in group.members:
+            if u.id != current_user.id:
+                emit('receive_message', packet, to=f"user_sys_{u.id}")
+        push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
+                                   f"{current_user.username} forwarded a message")
+    emit('receive_message', packet, to=room)
 
 
 # Run migrations at import time so it also works under gunicorn/gevent on Heroku.
