@@ -148,6 +148,13 @@
 
         #typing-indicator { color: var(--text-soft); font-size: 13px; font-style: italic; padding: 0 8% 4px; min-height: 18px; display: none; }
 
+        #attachment-preview { display: none; align-items: center; gap: 10px; padding: 8px 12px; margin-bottom: 8px;
+            background: var(--bg); border-radius: 10px; border-left: 3px solid var(--accent); }
+        #attachment-preview img { width: 48px; height: 48px; object-fit: cover; border-radius: 8px; }
+        #attachment-preview .ap-icon { width: 48px; height: 48px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 22px; }
+        #attachment-preview .ap-name { flex: 1; font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #attachment-preview .ap-close { cursor: pointer; background: none; border: none; font-size: 20px; color: var(--text-soft); }
+
         #composer-context { display: none; align-items: center; gap: 10px; padding: 8px 14px; margin-bottom: 8px;
             background: var(--bg); border-left: 3px solid var(--accent); border-radius: 8px; font-size: 13px; }
         #composer-context .cc-body { flex: 1; min-width: 0; }
@@ -421,6 +428,11 @@
         <div class="input-area">
             <div id="mention-box"></div>
             <div id="emoji-picker"></div>
+            <div id="attachment-preview">
+                <span id="ap-thumb"></span>
+                <span class="ap-name" id="ap-name"></span>
+                <button class="ap-close" onclick="clearPendingAttachment()">&times;</button>
+            </div>
             <div id="composer-context">
                 <div class="cc-body">
                     <div class="cc-title" id="cc-title"></div>
@@ -1482,7 +1494,7 @@
             renderedMessages = new Set(); oldestRenderedId = null; hasMoreOlder = false;
             seenState = {}; groupMembers = []; pinnedList = [];
             document.getElementById('pinned-banner').style.display = 'none';
-            clearComposerContext(); hideMentionBox();
+            clearComposerContext(); clearPendingAttachment(); hideMentionBox();
 
             document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
             const activeItem = document.getElementById('nav-' + type + '-' + id);
@@ -1610,29 +1622,65 @@
         function sendMessage() {
             const input = document.getElementById('message-input');
             const text = input.value;
-            if (text.trim() === '' || !currentChatId) return;
+            if (!currentChatId) return;
             if (editingMessageId) {
+                if (text.trim() === '') return;
                 socket.emit('edit_message', { message_id: editingMessageId, content: text });
                 editingMessageId = null;
                 document.getElementById('composer-context').style.display = 'none';
-            } else {
-                socket.emit('send_message', { type: currentChatType, id: currentChatId, message: text, reply_to_id: replyTo ? replyTo.msg_id : null });
-                clearComposerContext();
+                input.value = '';
+                hideMentionBox();
+                return;
             }
+            // nothing to send
+            if (text.trim() === '' && !pendingFile) return;
+            // staged attachment uploads first
+            if (pendingFile) {
+                uploadAttachment(pendingFile);
+                clearPendingAttachment();
+            }
+            // accompanying text (also acts as the message / caption)
+            if (text.trim() !== '') {
+                socket.emit('send_message', { type: currentChatType, id: currentChatId, message: text, reply_to_id: replyTo ? replyTo.msg_id : null });
+            }
+            clearComposerContext();
             input.value = '';
             hideMentionBox();
             document.getElementById('typing-indicator').style.display = 'none';
         }
 
         /* ---------- file upload + compression + drag-drop ---------- */
+        // Stage the file in the composer; it uploads only when the user sends.
+        let pendingFile = null, pendingPreviewUrl = null;
         function handleFiles(files) {
             if (!files || !files.length || !currentChatId) return;
-            let file = files[0];
-            const proceed = (f, name) => uploadBlob(f, name);
-            if (file.type && file.type.startsWith('image/')) {
-                compressImage(file).then(out => proceed(out, out.name || file.name)).catch(() => proceed(file, file.name));
-            } else proceed(file, file.name);
+            stageAttachment(files[0]);
             document.getElementById('chat-file-input').value = '';
+        }
+        function stageAttachment(file) {
+            clearPendingAttachment();
+            pendingFile = file;
+            const thumb = document.getElementById('ap-thumb');
+            document.getElementById('ap-name').textContent = file.name || 'Pasted image';
+            if (file.type && file.type.startsWith('image/')) {
+                pendingPreviewUrl = URL.createObjectURL(file);
+                thumb.innerHTML = `<img src="${pendingPreviewUrl}">`;
+            } else {
+                thumb.innerHTML = '<span class="ap-icon">📎</span>';
+            }
+            document.getElementById('attachment-preview').style.display = 'flex';
+            document.getElementById('message-input').focus();
+        }
+        function clearPendingAttachment() {
+            pendingFile = null;
+            if (pendingPreviewUrl) { URL.revokeObjectURL(pendingPreviewUrl); pendingPreviewUrl = null; }
+            document.getElementById('attachment-preview').style.display = 'none';
+            document.getElementById('ap-thumb').innerHTML = '';
+        }
+        function uploadAttachment(file) {
+            if (file.type && file.type.startsWith('image/'))
+                compressImage(file).then(out => uploadBlob(out, out.name || file.name)).catch(() => uploadBlob(file, file.name));
+            else uploadBlob(file, file.name);
         }
         function compressImage(file) {
             return new Promise((resolve, reject) => {
