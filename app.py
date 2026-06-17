@@ -131,17 +131,25 @@ group_members = db.Table('group_members',
     db.Column('group_id', db.Integer, db.ForeignKey('chat_group.id'), primary_key=True)
 )
 
+group_admins = db.Table('group_admins',
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
+    db.Column('group_id', db.Integer, db.ForeignKey('chat_group.id'), primary_key=True)
+)
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(150), nullable=False)
     profile_pic = db.Column(db.String(150), default='default')
+    last_seen = db.Column(db.DateTime, nullable=True)
     groups = db.relationship('ChatGroup', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
+    admin_groups = db.relationship('ChatGroup', secondary=group_admins, backref=db.backref('admins', lazy='dynamic'))
 
 class ChatGroup(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)
     photo = db.Column(db.String(250), default='default')
+    owner_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -192,6 +200,48 @@ class LinkPreview(db.Model):
     ok = db.Column(db.Boolean, default=False)
     fetched_at = db.Column(db.DateTime, default=datetime.now)
 
+# Per-user muted conversations (suppresses notifications, not delivery).
+class MutedChat(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    chat_type = db.Column(db.String(10), nullable=False)
+    chat_id = db.Column(db.Integer, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'chat_type', 'chat_id', name='uq_mute'),)
+
+# Per-user archived conversations (hidden from the main list).
+class ArchivedChat(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    chat_type = db.Column(db.String(10), nullable=False)
+    chat_id = db.Column(db.Integer, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'chat_type', 'chat_id', name='uq_archive'),)
+
+# Blocked users (blocker hides + can't receive DMs from blocked).
+class BlockedUser(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    blocker_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    blocked_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    __table_args__ = (db.UniqueConstraint('blocker_id', 'blocked_id', name='uq_block'),)
+
+# User reports for moderation review.
+class Report(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    reporter_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    reported_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    message_id = db.Column(db.Integer, nullable=True)
+    reason = db.Column(db.String(500))
+    timestamp = db.Column(db.DateTime, default=datetime.now)
+
+# Messages scheduled to be sent at a future time.
+class ScheduledMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    chat_type = db.Column(db.String(10), nullable=False)
+    chat_id = db.Column(db.Integer, nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    send_at = db.Column(db.DateTime, nullable=False, index=True)
+    sent = db.Column(db.Boolean, default=False, index=True)
+
 
 def safe_auto_migrate():
     """Create missing tables and add new columns without destroying data.
@@ -222,6 +272,14 @@ def safe_auto_migrate():
             gcols = {c['name'] for c in insp.get_columns('chat_group')}
             if 'photo' not in gcols:
                 to_add.append("ALTER TABLE chat_group ADD COLUMN photo VARCHAR(250)")
+            if 'owner_id' not in gcols:
+                to_add.append("ALTER TABLE chat_group ADD COLUMN owner_id INTEGER")
+        except Exception:
+            pass
+        try:
+            ucols = {c['name'] for c in insp.get_columns('user')}
+            if 'last_seen' not in ucols:
+                to_add.append('ALTER TABLE "user" ADD COLUMN last_seen TIMESTAMP')
         except Exception:
             pass
         for stmt in to_add:
@@ -299,6 +357,73 @@ def serialize_message(m):
         'preview': None if m.is_deleted else get_content_preview(m.content),
     }
 
+def serialize_messages(msgs):
+    """Batch-serialize a list of messages with a fixed number of queries
+    (avoids the N+1 problem of calling serialize_message per row)."""
+    if not msgs:
+        return []
+    ids = [m.id for m in msgs]
+    sender_ids = {m.sender_id for m in msgs}
+    reply_ids = {m.reply_to_id for m in msgs if m.reply_to_id}
+
+    reacts = MessageReaction.query.filter(MessageReaction.message_id.in_(ids)).all()
+    react_map = {}
+    for r in reacts:
+        react_map.setdefault(r.message_id, {}).setdefault(r.emoji, []).append(r.user_id)
+
+    reply_msgs = {rm.id: rm for rm in Message.query.filter(Message.id.in_(reply_ids)).all()} if reply_ids else {}
+    for rm in reply_msgs.values():
+        sender_ids.add(rm.sender_id)
+
+    umap = {u.id: u for u in User.query.filter(User.id.in_(sender_ids)).all()} if sender_ids else {}
+
+    url_map = {}
+    for m in msgs:
+        if not m.is_deleted and m.content:
+            u = extract_first_url(m.content)
+            if u:
+                url_map[m.id] = u
+    urls = set(url_map.values())
+    lp_map = {lp.url: lp for lp in LinkPreview.query.filter(LinkPreview.url.in_(urls)).all()} if urls else {}
+
+    out = []
+    for m in msgs:
+        sender = umap.get(m.sender_id)
+        rp = None
+        if m.reply_to_id and m.reply_to_id in reply_msgs:
+            rt = reply_msgs[m.reply_to_id]
+            rts = umap.get(rt.sender_id)
+            if rt.is_deleted:
+                snip = 'Deleted message'
+            elif rt.content:
+                snip = rt.content[:120]
+            elif rt.file_type:
+                snip = f'[{rt.file_type}]'
+            else:
+                snip = ''
+            rp = {'msg_id': rt.id, 'sender': rts.username if rts else '?', 'snippet': snip}
+        reactions = [{'emoji': e, 'user_ids': uids} for e, uids in react_map.get(m.id, {}).items()]
+        preview = serialize_preview(lp_map.get(url_map.get(m.id))) if (not m.is_deleted and m.id in url_map) else None
+        out.append({
+            'msg_id': m.id,
+            'sender': sender.username if sender else '?',
+            'sender_id': m.sender_id,
+            'content': '' if m.is_deleted else m.content,
+            'file_url': None if m.is_deleted else m.file_url,
+            'file_type': None if m.is_deleted else m.file_type,
+            'file_name': None if m.is_deleted else m.file_name,
+            'timestamp': m.timestamp.strftime('%I:%M %p'),
+            'ts_iso': m.timestamp.isoformat(),
+            'edited': bool(m.edited),
+            'is_deleted': bool(m.is_deleted),
+            'reply_to': rp,
+            'reactions': reactions,
+            'pinned': bool(m.pinned),
+            'forwarded': bool(m.forwarded),
+            'preview': preview,
+        })
+    return out
+
 def get_seen_state(chat_type, chat_id, me_id):
     """Return {reader_id: {'name': str, 'last_read_id': int}} for everyone
     (other than the current user) who has read messages in this chat."""
@@ -349,14 +474,37 @@ def _participant_lists(group):
                    if u.id not in member_ids]
     return members, non_members
 
+def group_roles(group):
+    admin_ids = [u.id for u in group.admins]
+    if group.owner_id and group.owner_id not in admin_ids:
+        admin_ids.append(group.owner_id)
+    return {'owner_id': group.owner_id, 'admin_ids': admin_ids}
+
+def is_group_admin(group, user):
+    if not group:
+        return False
+    if group.owner_id == user.id:
+        return True
+    return group.admins.filter_by(id=user.id).count() > 0
+
+def is_muted(user_id, chat_type, chat_id):
+    return MutedChat.query.filter_by(user_id=user_id, chat_type=chat_type, chat_id=chat_id).first() is not None
+
+def is_blocked_between(a, b):
+    return BlockedUser.query.filter(
+        or_(and_(BlockedUser.blocker_id == a, BlockedUser.blocked_id == b),
+            and_(BlockedUser.blocker_id == b, BlockedUser.blocked_id == a))).first() is not None
+
 def broadcast_participants(group):
     members, non_members = _participant_lists(group)
-    socketio.emit('participants_updated', {
+    payload = {
         'group_id': group.id,
         'members': members,
         'non_members': non_members,
         'member_count': len(members),
-    }, to=f"group_{group.id}")
+    }
+    payload.update(group_roles(group))
+    socketio.emit('participants_updated', payload, to=f"group_{group.id}")
 
 # ---------- WEB PUSH ----------
 
@@ -475,10 +623,12 @@ def maybe_fetch_preview(content, room, msg_id):
     if url:
         socketio.start_background_task(fetch_link_preview, url, room, msg_id)
 
-def push_to_offline_recipients(recipient_ids, title, body):
-    """Push to recipients who currently have no active socket connection."""
+def push_to_offline_recipients(recipient_ids, title, body, mute_type=None, mute_id=None):
+    """Push to recipients who have no active socket connection and haven't muted the chat."""
     for uid in recipient_ids:
         if uid != current_user.id and uid not in online_users:
+            if mute_type and is_muted(uid, mute_type, mute_id):
+                continue
             send_push_to_user(uid, title, body)
 
 
@@ -557,14 +707,22 @@ def reset_password():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    all_users = User.query.filter(User.id != current_user.id).all()
+    blocked_ids = {b.blocked_id for b in BlockedUser.query.filter_by(blocker_id=current_user.id).all()}
+    all_users = [u for u in User.query.filter(User.id != current_user.id).all() if u.id not in blocked_ids]
     user_groups = current_user.groups
     user_dict = {u.id: u for u in User.query.all()}
     dm_unread = {u.id: get_unread('dm', u.id, current_user.id) for u in all_users}
     group_unread = {g.id: get_unread('group', g.id, current_user.id) for g in user_groups}
+
+    muted = [f"{m.chat_type}:{m.chat_id}" for m in MutedChat.query.filter_by(user_id=current_user.id).all()]
+    archived = [f"{a.chat_type}:{a.chat_id}" for a in ArchivedChat.query.filter_by(user_id=current_user.id).all()]
+    online_now = list(online_users.keys())
+    last_seen = {u.id: (u.last_seen.isoformat() if u.last_seen else None) for u in all_users}
+
     return render_template('dashboard.html', users=all_users, groups=user_groups,
                            user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
-                           vapid_public_key=VAPID_PUBLIC_KEY)
+                           vapid_public_key=VAPID_PUBLIC_KEY, muted=muted, archived=archived,
+                           online_now=online_now, last_seen=last_seen, blocked_ids=list(blocked_ids))
 
 @app.route('/update_username', methods=['POST'])
 @login_required
@@ -600,7 +758,7 @@ def update_password():
 def upload_group_photo():
     group_id = int(request.form.get('group_id'))
     group = ChatGroup.query.get(group_id)
-    if not group or current_user not in group.members:
+    if not group or not is_group_admin(group, current_user):
         return {'error': 'Not allowed.'}, 403
     if 'file' not in request.files:
         return {'error': 'No file part'}, 400
@@ -681,6 +839,9 @@ def upload_chat_file():
     reply_to_id = request.form.get('reply_to_id')
     reply_to_id = int(reply_to_id) if reply_to_id else None
 
+    if chat_type == 'dm' and is_blocked_between(current_user.id, chat_id):
+        return {'error': 'Blocked.'}, 403
+
     if file and file.filename != '':
         filename = secure_filename(file.filename)
 
@@ -729,7 +890,7 @@ def upload_chat_file():
 
         if chat_type == 'dm':
             socketio.emit('receive_message', msg_packet, to=f"user_sys_{chat_id}")
-            push_to_offline_recipients([chat_id], current_user.username, f"Sent an attachment: {filename}")
+            push_to_offline_recipients([chat_id], current_user.username, f"Sent an attachment: {filename}", 'dm', current_user.id)
         else:
             group = ChatGroup.query.get(chat_id)
             msg_packet['group_name'] = group.name
@@ -737,7 +898,7 @@ def upload_chat_file():
                 if user.id != current_user.id:
                     socketio.emit('receive_message', msg_packet, to=f"user_sys_{user.id}")
             push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
-                                       f"{current_user.username} sent an attachment")
+                                       f"{current_user.username} sent an attachment", 'group', chat_id)
 
         socketio.emit('receive_message', msg_packet, to=room)
 
@@ -750,12 +911,14 @@ def create_group():
     group_name = request.form.get('group_name')
     member_ids = request.form.getlist('members')
     if group_name and member_ids:
-        new_group = ChatGroup(name=group_name)
+        new_group = ChatGroup(name=group_name, owner_id=current_user.id)
         new_group.members.append(current_user)
         for m_id in member_ids:
             user = User.query.get(int(m_id))
             if user: new_group.members.append(user)
         db.session.add(new_group)
+        db.session.commit()
+        current_user.admin_groups.append(new_group)  # creator is an admin
         db.session.commit()
         for user in new_group.members:
             socketio.emit('new_group', {'id': new_group.id, 'name': new_group.name}, to=f"user_sys_{user.id}")
@@ -797,7 +960,16 @@ def on_disconnect():
         online_users[uid] -= 1
         if online_users[uid] <= 0:
             online_users.pop(uid, None)
-            socketio.emit('presence_update', {'user_id': uid, 'online': False})
+            ls = None
+            try:
+                u = User.query.get(uid)
+                if u:
+                    u.last_seen = datetime.now()
+                    db.session.commit()
+                    ls = u.last_seen.isoformat()
+            except Exception:
+                db.session.rollback()
+            socketio.emit('presence_update', {'user_id': uid, 'online': False, 'last_seen': ls})
 
 @socketio.on('get_participants')
 def on_get_participants(data):
@@ -805,13 +977,34 @@ def on_get_participants(data):
     if not group or current_user not in group.members:
         return
     members, non_members = _participant_lists(group)
-    emit('show_participants', {'group_id': group.id, 'members': members, 'non_members': non_members})
+    payload = {'group_id': group.id, 'members': members, 'non_members': non_members,
+               'can_manage': is_group_admin(group, current_user)}
+    payload.update(group_roles(group))
+    emit('show_participants', payload)
+
+@socketio.on('set_group_admin')
+def on_set_group_admin(data):
+    group = ChatGroup.query.get(int(data['group_id']))
+    user = User.query.get(int(data['user_id']))
+    make_admin = bool(data.get('admin'))
+    # only the owner can change admin roles
+    if not group or not user or group.owner_id != current_user.id or user.id == group.owner_id:
+        return
+    if user not in group.members:
+        return
+    is_admin = group.admins.filter_by(id=user.id).count() > 0
+    if make_admin and not is_admin:
+        group.admins.append(user)
+    elif not make_admin and is_admin:
+        group.admins.remove(user)
+    db.session.commit()
+    broadcast_participants(group)
 
 @socketio.on('add_participant')
 def on_add_participant(data):
     group = ChatGroup.query.get(int(data['group_id']))
     user = User.query.get(int(data['user_id']))
-    if not group or not user or current_user not in group.members:
+    if not group or not user or not is_group_admin(group, current_user):
         return
     if user in group.members:
         return
@@ -824,11 +1017,13 @@ def on_add_participant(data):
 def on_remove_participant(data):
     group = ChatGroup.query.get(int(data['group_id']))
     user = User.query.get(int(data['user_id']))
-    if not group or not user or current_user not in group.members:
+    if not group or not user or not is_group_admin(group, current_user):
         return
-    if user not in group.members:
-        return
+    if user not in group.members or user.id == group.owner_id:
+        return  # can't remove the owner
     group.members.remove(user)
+    if user in group.admins:
+        group.admins.remove(user)
     db.session.commit()
     socketio.emit('removed_from_group', {
         'id': group.id, 'name': group.name, 'by': current_user.username
@@ -846,7 +1041,7 @@ def on_join(data):
     q = base_chat_query(chat_type, chat_id, current_user.id)
     total = q.count()
     recent = q.offset(max(0, total - PAGE_SIZE)).limit(PAGE_SIZE).all()
-    history = [serialize_message(m) for m in recent]
+    history = serialize_messages(recent)
 
     pinned = q.filter(Message.pinned == True, Message.is_deleted == False).all()
     payload = {
@@ -859,6 +1054,12 @@ def on_join(data):
         group = ChatGroup.query.get(chat_id)
         payload['members'] = [{'id': u.id, 'username': u.username} for u in group.members] if group else []
         payload['member_count'] = len(payload['members'])
+        if group:
+            payload.update(group_roles(group))
+            payload['can_manage'] = is_group_admin(group, current_user)
+    else:
+        other = User.query.get(chat_id)
+        payload['last_seen'] = other.last_seen.isoformat() if (other and other.last_seen) else None
 
     emit('load_history', payload)
 
@@ -873,7 +1074,7 @@ def on_load_older(data):
     older = q.offset(max(0, total_older - PAGE_SIZE)).limit(PAGE_SIZE).all()
 
     emit('older_history', {
-        'messages': [serialize_message(m) for m in older],
+        'messages': serialize_messages(older),
         'has_more': total_older > len(older),
     })
 
@@ -925,6 +1126,9 @@ def handle_message(data):
     reply_to_id = data.get('reply_to_id')
     reply_to_id = int(reply_to_id) if reply_to_id else None
 
+    if chat_type == 'dm' and is_blocked_between(current_user.id, chat_id):
+        return
+
     if chat_type == 'dm':
         new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content=content, reply_to_id=reply_to_id)
         room = dm_room(current_user.id, chat_id)
@@ -949,7 +1153,7 @@ def handle_message(data):
 
     if chat_type == 'dm':
         emit('receive_message', msg_packet, to=f"user_sys_{chat_id}")
-        push_to_offline_recipients([chat_id], current_user.username, content)
+        push_to_offline_recipients([chat_id], current_user.username, content, 'dm', current_user.id)
     else:
         group = ChatGroup.query.get(chat_id)
         msg_packet['group_name'] = group.name
@@ -957,7 +1161,7 @@ def handle_message(data):
             if user.id != current_user.id:
                 emit('receive_message', msg_packet, to=f"user_sys_{user.id}")
         push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
-                                   f"{current_user.username}: {content}")
+                                   f"{current_user.username}: {content}", 'group', chat_id)
 
     emit('receive_message', msg_packet, to=room)
 
@@ -1069,7 +1273,7 @@ def _pin_preview(m):
 def on_rename_group(data):
     group = ChatGroup.query.get(int(data['group_id']))
     new_name = (data.get('name') or '').strip()
-    if not group or current_user not in group.members or not new_name:
+    if not group or not is_group_admin(group, current_user) or not new_name:
         return
     group.name = new_name[:150]
     db.session.commit()
@@ -1127,8 +1331,10 @@ def on_forward_message(data):
         'pinned': False, 'forwarded': True, 'preview': None
     }
     if target_type == 'dm':
+        if is_blocked_between(current_user.id, target_id):
+            return
         emit('receive_message', packet, to=f"user_sys_{target_id}")
-        push_to_offline_recipients([target_id], current_user.username, packet['message'] or 'Forwarded a message')
+        push_to_offline_recipients([target_id], current_user.username, packet['message'] or 'Forwarded a message', 'dm', current_user.id)
     else:
         group = ChatGroup.query.get(target_id)
         packet['group_name'] = group.name
@@ -1136,12 +1342,175 @@ def on_forward_message(data):
             if u.id != current_user.id:
                 emit('receive_message', packet, to=f"user_sys_{u.id}")
         push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
-                                   f"{current_user.username} forwarded a message")
+                                   f"{current_user.username} forwarded a message", 'group', target_id)
     emit('receive_message', packet, to=room)
+
+
+# ---------- mute / archive / block / report ----------
+
+@socketio.on('toggle_mute')
+def on_toggle_mute(data):
+    ct, cid = data['chat_type'], int(data['chat_id'])
+    row = MutedChat.query.filter_by(user_id=current_user.id, chat_type=ct, chat_id=cid).first()
+    if row:
+        db.session.delete(row); muted = False
+    else:
+        db.session.add(MutedChat(user_id=current_user.id, chat_type=ct, chat_id=cid)); muted = True
+    db.session.commit()
+    emit('mute_updated', {'chat_type': ct, 'chat_id': cid, 'muted': muted})
+
+@socketio.on('toggle_archive')
+def on_toggle_archive(data):
+    ct, cid = data['chat_type'], int(data['chat_id'])
+    row = ArchivedChat.query.filter_by(user_id=current_user.id, chat_type=ct, chat_id=cid).first()
+    if row:
+        db.session.delete(row); archived = False
+    else:
+        db.session.add(ArchivedChat(user_id=current_user.id, chat_type=ct, chat_id=cid)); archived = True
+    db.session.commit()
+    emit('archive_updated', {'chat_type': ct, 'chat_id': cid, 'archived': archived})
+
+@socketio.on('block_user')
+def on_block_user(data):
+    uid = int(data['user_id'])
+    if uid == current_user.id:
+        return
+    if not BlockedUser.query.filter_by(blocker_id=current_user.id, blocked_id=uid).first():
+        db.session.add(BlockedUser(blocker_id=current_user.id, blocked_id=uid))
+        db.session.commit()
+    emit('block_updated', {'user_id': uid, 'blocked': True})
+
+@socketio.on('unblock_user')
+def on_unblock_user(data):
+    uid = int(data['user_id'])
+    row = BlockedUser.query.filter_by(blocker_id=current_user.id, blocked_id=uid).first()
+    if row:
+        db.session.delete(row); db.session.commit()
+    emit('block_updated', {'user_id': uid, 'blocked': False})
+
+@socketio.on('report_user')
+def on_report_user(data):
+    db.session.add(Report(
+        reporter_id=current_user.id,
+        reported_user_id=int(data['user_id']) if data.get('user_id') else None,
+        message_id=int(data['message_id']) if data.get('message_id') else None,
+        reason=(data.get('reason') or '')[:500]))
+    db.session.commit()
+    emit('report_ack', {'ok': True})
+
+@socketio.on('schedule_message')
+def on_schedule_message(data):
+    ct, cid = data['type'], int(data['id'])
+    content = (data.get('message') or '').strip()
+    if not content:
+        return
+    try:
+        send_at = datetime.fromisoformat(data['send_at'])
+    except Exception:
+        return
+    if ct == 'dm' and is_blocked_between(current_user.id, cid):
+        return
+    db.session.add(ScheduledMessage(sender_id=current_user.id, chat_type=ct, chat_id=cid,
+                                    content=content, send_at=send_at, sent=False))
+    db.session.commit()
+    emit('scheduled_ack', {'ok': True, 'send_at': send_at.isoformat()})
+
+@app.route('/export_chat')
+@login_required
+def export_chat():
+    ct = request.args.get('type')
+    cid = int(request.args.get('id'))
+    if ct == 'group':
+        group = ChatGroup.query.get(cid)
+        if not group or current_user not in group.members:
+            return "Not allowed", 403
+        title = f"# {group.name}"
+    else:
+        other = User.query.get(cid)
+        title = f"DM with {other.username if other else cid}"
+    msgs = base_chat_query(ct, cid, current_user.id).all()
+    lines = [f"Chat export: {title}", "=" * 40, ""]
+    for m in msgs:
+        sender = User.query.get(m.sender_id)
+        ts = m.timestamp.strftime('%Y-%m-%d %H:%M')
+        if m.is_deleted:
+            body = "[deleted]"
+        elif m.content:
+            body = m.content
+        elif m.file_name:
+            body = f"[file: {m.file_name}]"
+        else:
+            body = ""
+        lines.append(f"[{ts}] {sender.username if sender else '?'}: {body}")
+    text_out = "\n".join(lines)
+    return app.response_class(
+        text_out, mimetype='text/plain',
+        headers={'Content-Disposition': 'attachment; filename="chat_export.txt"'})
+
+# ---------- scheduled message delivery (background) ----------
+
+def deliver_scheduled(sm):
+    sender = User.query.get(sm.sender_id)
+    if not sender:
+        return
+    if sm.chat_type == 'dm':
+        if is_blocked_between(sm.sender_id, sm.chat_id):
+            return
+        new_msg = Message(sender_id=sm.sender_id, receiver_id=sm.chat_id, content=sm.content)
+        room = dm_room(sm.sender_id, sm.chat_id)
+    else:
+        new_msg = Message(sender_id=sm.sender_id, group_id=sm.chat_id, content=sm.content)
+        room = f"group_{sm.chat_id}"
+    db.session.add(new_msg)
+    db.session.commit()
+    mentions = extract_mentions(sm.content, sm.chat_id) if sm.chat_type == 'group' else []
+    packet = {
+        'msg_id': new_msg.id, 'username': sender.username, 'message': sm.content,
+        'file_url': None, 'file_type': None, 'file_name': None,
+        'type': sm.chat_type, 'group_id': sm.chat_id if sm.chat_type == 'group' else None,
+        'sender_id': sm.sender_id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
+        'ts_iso': new_msg.timestamp.isoformat(), 'mentions': mentions,
+        'reply_to': None, 'reactions': [], 'edited': False,
+        'pinned': False, 'forwarded': False, 'preview': None
+    }
+    if sm.chat_type == 'dm':
+        socketio.emit('receive_message', packet, to=f"user_sys_{sm.chat_id}")
+        if sm.chat_id not in online_users and not is_muted(sm.chat_id, 'dm', sm.sender_id):
+            send_push_to_user(sm.chat_id, sender.username, sm.content)
+    else:
+        group = ChatGroup.query.get(sm.chat_id)
+        if group:
+            packet['group_name'] = group.name
+            for u in group.members:
+                if u.id != sm.sender_id:
+                    socketio.emit('receive_message', packet, to=f"user_sys_{u.id}")
+                    if u.id not in online_users and not is_muted(u.id, 'group', sm.chat_id):
+                        send_push_to_user(u.id, f"#{group.name}", f"{sender.username}: {sm.content}")
+    socketio.emit('receive_message', packet, to=room)
+
+def scheduled_poller():
+    while True:
+        socketio.sleep(20)
+        try:
+            with app.app_context():
+                due = ScheduledMessage.query.filter(
+                    ScheduledMessage.sent == False,
+                    ScheduledMessage.send_at <= datetime.now()
+                ).all()
+                for sm in due:
+                    sm.sent = True
+                    db.session.commit()
+                    try:
+                        deliver_scheduled(sm)
+                    except Exception:
+                        db.session.rollback()
+        except Exception:
+            pass
 
 
 # Run migrations at import time so it also works under gunicorn/gevent on Heroku.
 safe_auto_migrate()
+socketio.start_background_task(scheduled_poller)
 
 if __name__ == '__main__':
     socketio.run(app, debug=True)

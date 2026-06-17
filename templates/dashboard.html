@@ -262,6 +262,42 @@
         .settings-msg.ok { color: var(--green); }
         .settings-msg.err { color: var(--danger); }
 
+        /* header overflow menu */
+        .menu-wrap { position: relative; }
+        #chat-menu { position: absolute; right: 0; top: 110%; background: var(--panel); border: 1px solid var(--border);
+            border-radius: 12px; box-shadow: var(--shadow); min-width: 180px; overflow: hidden; display: none; z-index: 70; }
+        #chat-menu button { display: block; width: 100%; text-align: left; padding: 11px 16px; background: none; border: none;
+            color: var(--text); font-size: 14px; cursor: pointer; }
+        #chat-menu button:hover { background: var(--bg); }
+        #chat-menu button.danger { color: var(--danger); }
+
+        /* archived section */
+        #archived-section { display: none; }
+        #archived-section.show { display: block; }
+        .archived-toggle { padding: 10px 18px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+            color: var(--text-soft); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+        .item .mute-ic { font-size: 12px; color: var(--text-soft); margin-left: 4px; }
+
+        /* composer extra buttons */
+        .compose-btn { background: var(--bg); color: var(--text-soft); border: none; border-radius: 50%;
+            width: 44px; height: 44px; cursor: pointer; font-size: 19px; flex-shrink: 0; transition: .15s; }
+        .compose-btn:hover { background: var(--accent-soft); }
+        .compose-btn.recording { background: var(--danger); color: #fff; animation: pulse 1s infinite; }
+
+        /* compose emoji picker */
+        #emoji-picker { position: absolute; bottom: 76px; left: 18px; background: var(--panel); border: 1px solid var(--border);
+            border-radius: 12px; box-shadow: var(--shadow); padding: 8px; display: none; grid-template-columns: repeat(8, 1fr);
+            gap: 2px; z-index: 55; max-width: 320px; }
+        #emoji-picker span { font-size: 22px; cursor: pointer; padding: 3px; border-radius: 6px; text-align: center; }
+        #emoji-picker span:hover { background: var(--accent-soft); }
+
+        /* admin badges in participants */
+        #participants-list li .role-tag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+        .role-tag.owner { background: #fef3c7; color: #92400e; }
+        .role-tag.admin { background: var(--accent-soft); color: var(--accent); }
+        .role-btn { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px;
+            padding: 4px 9px; font-size: 11px; font-weight: 600; cursor: pointer; }
+
         .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 90; }
         #lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 500; align-items: center; justify-content: center; }
         #lightbox img { max-width: 92vw; max-height: 92vh; border-radius: 8px; }
@@ -337,6 +373,9 @@
                     </div>
                 {% endfor %}
             </div>
+
+            <div class="archived-toggle" id="archived-toggle" onclick="document.getElementById('archived-section').classList.toggle('show')" style="display:none;">&#9656; Archived</div>
+            <div id="archived-section"></div>
         </div>
 
         <button class="create-btn" onclick="document.getElementById('groupModal').style.display='block'">+ New Group</button>
@@ -353,6 +392,10 @@
                 <div class="h-sub" id="chat-subtitle"></div>
             </div>
             <div id="header-actions"></div>
+            <div class="menu-wrap" id="menu-wrap" style="display:none;">
+                <button class="icon-btn" onclick="toggleChatMenu(event)">&#8942;</button>
+                <div id="chat-menu"></div>
+            </div>
         </div>
 
         <div id="pinned-banner">
@@ -373,6 +416,7 @@
 
         <div class="input-area">
             <div id="mention-box"></div>
+            <div id="emoji-picker"></div>
             <div id="composer-context">
                 <div class="cc-body">
                     <div class="cc-title" id="cc-title"></div>
@@ -381,9 +425,12 @@
                 <button class="cc-close" onclick="clearComposerContext()">&times;</button>
             </div>
             <div class="input-controls">
-                <button id="attach-btn" onclick="document.getElementById('chat-file-input').click();" disabled>&#128206;</button>
+                <button id="attach-btn" class="compose-btn" onclick="document.getElementById('chat-file-input').click();" disabled>&#128206;</button>
                 <input type="file" id="chat-file-input" onchange="handleFiles(this.files)">
+                <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled>&#128512;</button>
+                <button id="mic-btn" class="compose-btn" onclick="toggleRecording()" disabled title="Record voice message">&#127908;</button>
                 <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
+                <button id="schedule-btn" class="compose-btn" onclick="openSchedule()" disabled title="Schedule message">&#128340;</button>
                 <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
             </div>
         </div>
@@ -489,6 +536,11 @@
             {% endfor %}
         };
         const VAPID_PUBLIC_KEY = "{{ vapid_public_key }}";
+        const mutedChats = new Set({{ muted|tojson }});
+        const archivedChats = new Set({{ archived|tojson }});
+        const blockedIds = new Set({{ blocked_ids|tojson }});
+        const lastSeenMap = {{ last_seen|tojson }};
+        const initialOnline = {{ online_now|tojson }};
     </script>
 
     <script>
@@ -991,6 +1043,155 @@
         }
         registerServiceWorker();
 
+        /* ---------- chat overflow menu (mute / archive / export / block / report) ---------- */
+        function chatKey() { return `${currentChatType}:${currentChatId}`; }
+        function toggleChatMenu(ev) {
+            if (ev) ev.stopPropagation();
+            const menu = document.getElementById('chat-menu');
+            if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
+            buildChatMenu();
+            menu.style.display = 'block';
+        }
+        function buildChatMenu() {
+            const menu = document.getElementById('chat-menu');
+            const muted = mutedChats.has(chatKey());
+            const archived = archivedChats.has(chatKey());
+            let html = `<button onclick="doMute()">${muted ? 'Unmute' : 'Mute'} notifications</button>
+                        <button onclick="doArchive()">${archived ? 'Unarchive' : 'Archive'} chat</button>
+                        <button onclick="doExport()">Export chat</button>`;
+            if (currentChatType === 'dm') {
+                const blocked = blockedIds.has(currentChatId);
+                html += `<button class="danger" onclick="doBlock(${blocked})">${blocked ? 'Unblock user' : 'Block user'}</button>
+                         <button class="danger" onclick="doReport()">Report user</button>`;
+            }
+            menu.innerHTML = html;
+        }
+        document.addEventListener('click', e => {
+            const mw = document.getElementById('menu-wrap');
+            if (mw && !mw.contains(e.target)) document.getElementById('chat-menu').style.display = 'none';
+        });
+        function closeChatMenu() { document.getElementById('chat-menu').style.display = 'none'; }
+        function doMute() { socket.emit('toggle_mute', { chat_type: currentChatType, chat_id: currentChatId }); closeChatMenu(); }
+        function doArchive() { socket.emit('toggle_archive', { chat_type: currentChatType, chat_id: currentChatId }); closeChatMenu(); }
+        function doExport() { window.open(`/export_chat?type=${currentChatType}&id=${currentChatId}`, '_blank'); closeChatMenu(); }
+        function doBlock(currentlyBlocked) {
+            if (currentlyBlocked) socket.emit('unblock_user', { user_id: currentChatId });
+            else if (confirm('Block this user? You will no longer exchange messages.')) socket.emit('block_user', { user_id: currentChatId });
+            closeChatMenu();
+        }
+        function doReport() {
+            const reason = prompt('Report this user — describe the issue:');
+            if (reason) socket.emit('report_user', { user_id: currentChatId, reason });
+            closeChatMenu();
+        }
+        socket.on('mute_updated', function(data) {
+            const key = `${data.chat_type}:${data.chat_id}`;
+            if (data.muted) mutedChats.add(key); else mutedChats.delete(key);
+            const nav = document.getElementById('nav-' + data.chat_type + '-' + data.chat_id);
+            if (nav) {
+                let ic = nav.querySelector('.mute-ic');
+                if (data.muted && !ic) { ic = document.createElement('span'); ic.className = 'mute-ic'; ic.textContent = '🔇'; nav.querySelector('.name').after(ic); }
+                else if (!data.muted && ic) ic.remove();
+            }
+            showToast('Notifications', data.muted ? 'Chat muted' : 'Chat unmuted');
+        });
+        socket.on('archive_updated', function(data) {
+            const key = `${data.chat_type}:${data.chat_id}`;
+            const nav = document.getElementById('nav-' + data.chat_type + '-' + data.chat_id);
+            if (data.archived) { archivedChats.add(key); if (nav) document.getElementById('archived-section').appendChild(nav); }
+            else { archivedChats.delete(key); if (nav) document.getElementById((data.chat_type === 'dm' ? 'dm-list' : 'group-list')).appendChild(nav); }
+            refreshArchivedToggle();
+            showToast('Chat', data.archived ? 'Archived' : 'Unarchived');
+        });
+        socket.on('block_updated', function(data) {
+            if (data.blocked) {
+                blockedIds.add(data.user_id);
+                const nav = document.getElementById('nav-dm-' + data.user_id);
+                if (nav) nav.remove();
+                if (currentChatType === 'dm' && currentChatId === data.user_id) location.reload();
+                showToast('Blocked', 'You will no longer exchange messages with this user.');
+            } else { blockedIds.delete(data.user_id); showToast('Unblocked', 'Reload to see this conversation again.'); }
+        });
+        socket.on('report_ack', function() { showToast('Report submitted', 'Thanks — our team will review it.'); });
+
+        function refreshArchivedToggle() {
+            const sec = document.getElementById('archived-section');
+            document.getElementById('archived-toggle').style.display = sec.children.length ? 'flex' : 'none';
+        }
+        // move initially-archived chats into the archived section
+        (function initArchived() {
+            archivedChats.forEach(key => {
+                const [t, id] = key.split(':');
+                const nav = document.getElementById('nav-' + t + '-' + id);
+                if (nav) document.getElementById('archived-section').appendChild(nav);
+            });
+            // mute icons
+            mutedChats.forEach(key => {
+                const [t, id] = key.split(':');
+                const nav = document.getElementById('nav-' + t + '-' + id);
+                if (nav && !nav.querySelector('.mute-ic')) { const ic = document.createElement('span'); ic.className = 'mute-ic'; ic.textContent = '🔇'; nav.querySelector('.name').after(ic); }
+            });
+            refreshArchivedToggle();
+        })();
+
+        /* ---------- compose emoji picker ---------- */
+        const EMOJIS = ['😀','😂','😍','😎','😭','😡','👍','👎','🙏','🎉','❤️','🔥','✅','❌','💯','🤔','😅','😉','🙌','👀','🚀','💡','📌','⭐','😴','🤝','👏','💪','🍕','☕'];
+        (function initEmojiPicker() {
+            const p = document.getElementById('emoji-picker');
+            p.innerHTML = EMOJIS.map(e => `<span>${e}</span>`).join('');
+            p.querySelectorAll('span').forEach(s => s.onclick = () => {
+                const input = document.getElementById('message-input');
+                const pos = input.selectionStart || input.value.length;
+                input.value = input.value.slice(0, pos) + s.textContent + input.value.slice(pos);
+                input.focus(); input.selectionStart = input.selectionEnd = pos + s.textContent.length;
+            });
+        })();
+        function toggleEmojiPicker() {
+            const p = document.getElementById('emoji-picker');
+            p.style.display = p.style.display === 'grid' ? 'none' : 'grid';
+        }
+
+        /* ---------- voice messages ---------- */
+        let mediaRecorder = null, audioChunks = [];
+        async function toggleRecording() {
+            const btn = document.getElementById('mic-btn');
+            if (mediaRecorder && mediaRecorder.state === 'recording') { mediaRecorder.stop(); return; }
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { alert('Recording not supported in this browser.'); return; }
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+                mediaRecorder.onstop = () => {
+                    stream.getTracks().forEach(t => t.stop());
+                    btn.classList.remove('recording');
+                    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+                    const ext = (blob.type.indexOf('ogg') !== -1) ? 'ogg' : 'webm';
+                    uploadBlob(blob, `voice_${Date.now()}.${ext}`);
+                };
+                mediaRecorder.start();
+                btn.classList.add('recording');
+                showToast('Recording', 'Tap the mic again to stop and send.');
+            } catch (e) { alert('Could not access microphone.'); }
+        }
+
+        /* ---------- scheduled messages ---------- */
+        function openSchedule() {
+            const input = document.getElementById('message-input');
+            const text = input.value.trim();
+            if (!text) { alert('Type your message first, then schedule it.'); return; }
+            const when = prompt('Send at (YYYY-MM-DD HH:MM, your local time):');
+            if (!when) return;
+            const dt = new Date(when.replace(' ', 'T'));
+            if (isNaN(dt.getTime()) || dt < new Date()) { alert('Please enter a valid future date/time.'); return; }
+            socket.emit('schedule_message', { type: currentChatType, id: currentChatId, message: text, send_at: dt.toISOString() });
+            input.value = '';
+        }
+        socket.on('scheduled_ack', function(data) {
+            const d = new Date(data.send_at);
+            showToast('Scheduled', `Message will send ${d.toLocaleString()}`);
+        });
+
         /* ---------- seen indicator ---------- */
         function updateSeenIndicator() {
             const old = document.getElementById('seen-indicator'); if (old) old.remove();
@@ -1008,21 +1209,36 @@
         }
 
         /* ---------- presence ---------- */
+        function formatLastSeen(iso) {
+            if (!iso) return 'Offline';
+            const d = new Date(iso), now = new Date();
+            const mins = Math.floor((now - d) / 60000);
+            if (mins < 1) return 'last seen just now';
+            if (mins < 60) return `last seen ${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24 && d.toDateString() === now.toDateString()) return `last seen at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+            return `last seen ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+        }
+        function setDmSubtitle(uid) {
+            const sub = document.getElementById('chat-subtitle');
+            const on = onlineUsers.has(uid);
+            sub.textContent = on ? 'Online' : formatLastSeen(lastSeenMap[uid]);
+            sub.classList.toggle('online', on);
+        }
         function setPresence(uid, online) {
             if (online) onlineUsers.add(uid); else onlineUsers.delete(uid);
             const dot = document.getElementById('dot-' + uid);
             if (dot) dot.classList.toggle('on', online);
-            if (currentChatType === 'dm' && currentChatId === uid) {
-                const sub = document.getElementById('chat-subtitle');
-                sub.textContent = online ? 'Online' : 'Offline';
-                sub.classList.toggle('online', online);
-            }
+            if (currentChatType === 'dm' && currentChatId === uid) setDmSubtitle(uid);
         }
+        initialOnline.forEach(uid => { if (uid !== myUserId) onlineUsers.add(uid); });
         socket.on('presence_state', function(data) {
             (data.online || []).forEach(uid => { if (uid !== myUserId) setPresence(uid, true); });
         });
         socket.on('presence_update', function(data) {
-            if (data.user_id !== myUserId) setPresence(data.user_id, data.online);
+            if (data.user_id === myUserId) return;
+            if (data.last_seen) lastSeenMap[data.user_id] = data.last_seen;
+            setPresence(data.user_id, data.online);
         });
 
         /* ---------- sidebar / filter ---------- */
@@ -1066,32 +1282,54 @@
         });
 
         /* ---------- participants ---------- */
-        let participantsGroupId = null;
+        let participantsGroupId = null, groupOwnerId = null, groupAdminIds = [], canManageGroup = false;
         function renderParticipants(members, nonMembers) {
             const list = document.getElementById('participants-list');
             list.innerHTML = '';
             members.forEach(m => {
                 const li = document.createElement('li');
                 const isMe = m.id === myUserId;
+                const isOwner = m.id === groupOwnerId;
+                const isAdmin = groupAdminIds.includes(m.id);
+                const roleTag = isOwner ? '<span class="role-tag owner">Owner</span>' : (isAdmin ? '<span class="role-tag admin">Admin</span>' : '');
+                let roleBtn = '';
+                if (myUserId === groupOwnerId && !isOwner)
+                    roleBtn = isAdmin ? `<button class="role-btn" onclick="setAdmin(${m.id}, false)">Demote</button>`
+                                      : `<button class="role-btn" onclick="setAdmin(${m.id}, true)">Make admin</button>`;
+                const removeBtn = (canManageGroup && !isMe && !isOwner) ? `<button class="remove-btn" data-id="${m.id}" data-name="${escapeHtml(m.username)}">Remove</button>` : '';
                 li.innerHTML = `
                     <img src="${avatarFor(m.id, m.username)}" data-uname="${escapeHtml(m.username)}" onerror="avatarFallback(this)">
-                    <span class="p-name">${escapeHtml(m.username)}</span>
-                    ${isMe ? '<span class="you-tag">You</span>' : `<button class="remove-btn" data-id="${m.id}" data-name="${escapeHtml(m.username)}">Remove</button>`}`;
+                    <span class="p-name">${escapeHtml(m.username)}${isMe ? ' <span class="you-tag">(You)</span>' : ''}</span>
+                    ${roleTag} ${roleBtn} ${removeBtn}`;
                 list.appendChild(li);
             });
             list.querySelectorAll('.remove-btn').forEach(btn => { btn.onclick = () => removeParticipant(parseInt(btn.dataset.id), btn.dataset.name); });
             const row = document.getElementById('add-participant-row');
+            if (!canManageGroup) { row.innerHTML = '<div class="empty-note">Only admins can add members.</div>'; return; }
             if (!nonMembers.length) row.innerHTML = '<div class="empty-note">Everyone is already in this group.</div>';
             else row.innerHTML = `<select id="add-participant-select">${nonMembers.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join('')}</select><button class="modal-btn primary" onclick="addParticipant()">Add</button>`;
         }
+        function setRoleState(data) {
+            groupOwnerId = data.owner_id != null ? data.owner_id : groupOwnerId;
+            if (data.admin_ids) groupAdminIds = data.admin_ids;
+            if (data.can_manage !== undefined) canManageGroup = data.can_manage;
+        }
+        function setAdmin(uid, makeAdmin) {
+            if (participantsGroupId) socket.emit('set_group_admin', { group_id: participantsGroupId, user_id: uid, admin: makeAdmin });
+        }
         socket.on('show_participants', function(data) {
             participantsGroupId = data.group_id;
+            setRoleState(data);
             renderParticipants(data.members, data.non_members);
             // populate group settings
             const nav = document.getElementById('nav-group-' + data.group_id);
             const gname = nav ? nav.querySelector('.name').textContent : '';
             document.getElementById('gs-name').value = gname;
             document.getElementById('gs-group-id').value = data.group_id;
+            document.getElementById('gs-name').disabled = !canManageGroup;
+            // only admins can rename / change photo
+            document.querySelector('.group-settings .modal-btn').style.display = canManageGroup ? '' : 'none';
+            document.getElementById('group-photo-form').style.display = canManageGroup ? '' : 'none';
             const gp = document.getElementById('gs-photo');
             if (groupPhotos[data.group_id]) gp.outerHTML = `<img id="gs-photo" src="${groupPhotos[data.group_id]}" data-uname="${escapeHtml(gname)}" onerror="avatarFallback(this)">`;
             else { gp.outerHTML = '<span id="gs-photo" class="gs-ph">#</span>'; }
@@ -1106,8 +1344,10 @@
             if (participantsGroupId && confirm(`Remove ${name} from this group?`)) socket.emit('remove_participant', { group_id: participantsGroupId, user_id: userId });
         }
         socket.on('participants_updated', function(data) {
-            if (document.getElementById('participantsModal').style.display === 'block' && data.group_id === participantsGroupId)
+            if (document.getElementById('participantsModal').style.display === 'block' && data.group_id === participantsGroupId) {
+                setRoleState(data);
                 renderParticipants(data.members, data.non_members);
+            }
             if (currentChatType === 'group' && currentChatId === data.group_id) {
                 groupMembers = data.members; groupMemberCount = data.member_count;
                 document.getElementById('chat-subtitle').textContent = `${data.member_count} members`;
@@ -1154,8 +1394,7 @@
 
             if (type === 'dm') {
                 headerAvatar.dataset.uname = name; headerAvatar.src = avatarFor(id, name); headerAvatar.style.display = '';
-                const on = onlineUsers.has(id);
-                subtitle.textContent = on ? 'Online' : 'Offline'; subtitle.classList.toggle('online', on);
+                setDmSubtitle(id);
                 headerActions.innerHTML = '';
             } else {
                 applyGroupHeaderPhoto(id, name); subtitle.textContent = ''; subtitle.classList.remove('online');
@@ -1165,9 +1404,10 @@
             }
 
             document.getElementById('chat-box').innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
-            document.getElementById('message-input').disabled = false;
-            document.getElementById('send-btn').disabled = false;
-            document.getElementById('attach-btn').disabled = false;
+            ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'mic-btn', 'schedule-btn'].forEach(bid => document.getElementById(bid).disabled = false);
+            document.getElementById('menu-wrap').style.display = '';
+            document.getElementById('chat-menu').style.display = 'none';
+            document.getElementById('emoji-picker').style.display = 'none';
             document.getElementById('message-input').focus();
             toggleSidebar(false);
             socket.emit('join_chat', { type: type, id: id });
@@ -1179,7 +1419,8 @@
             hasMoreOlder = payload.has_more; seenState = payload.seen || {};
             pinnedList = payload.pinned || [];
             if (payload.members) { groupMembers = payload.members; groupMemberCount = payload.member_count || payload.members.length; }
-            if (currentChatType === 'group') document.getElementById('chat-subtitle').textContent = `${groupMemberCount} members`;
+            if (currentChatType === 'group') { setRoleState(payload); document.getElementById('chat-subtitle').textContent = `${groupMemberCount} members`; }
+            else if (currentChatType === 'dm') { if (payload.last_seen) lastSeenMap[currentChatId] = payload.last_seen; setDmSubtitle(currentChatId); }
             payload.messages.forEach(appendMessage);
             renderPinnedBanner();
             chatBox.scrollTop = chatBox.scrollHeight;
@@ -1233,14 +1474,19 @@
                 document.getElementById('typing-indicator').style.display = 'none';
                 updateSeenIndicator();
                 if (data.sender_id !== myUserId) {
-                    playNotif(mentionsMe);
-                    browserNotify(mentionsMe ? `${data.username} mentioned you` : data.username, data.message || 'Sent an attachment');
+                    const mk = data.type === 'dm' ? `dm:${data.sender_id}` : `group:${data.group_id}`;
+                    if (!mutedChats.has(mk)) {
+                        playNotif(mentionsMe);
+                        browserNotify(mentionsMe ? `${data.username} mentioned you` : data.username, data.message || 'Sent an attachment');
+                    }
                     socket.emit('mark_read', { type: currentChatType, id: currentChatId });
                 }
             } else if (data.sender_id !== myUserId) {
+                const muteKey = data.type === 'dm' ? `dm:${data.sender_id}` : `group:${data.group_id}`;
+                const muted = mutedChats.has(muteKey);
                 const preview = data.file_name ? `Sent an attachment: ${data.file_name}` : data.message;
-                if (mentionsMe) { showToast(`${data.username} mentioned you in #${data.group_name}`, preview, true); playNotif(true); browserNotify(`${data.username} mentioned you`, preview); }
-                else { const title = data.type === 'dm' ? `Message from ${data.username}` : `New in #${data.group_name}`; showToast(title, preview, false); playNotif(false); browserNotify(title, preview); }
+                if (!muted && mentionsMe) { showToast(`${data.username} mentioned you in #${data.group_name}`, preview, true); playNotif(true); browserNotify(`${data.username} mentioned you`, preview); }
+                else if (!muted) { const title = data.type === 'dm' ? `Message from ${data.username}` : `New in #${data.group_name}`; showToast(title, preview, false); playNotif(false); browserNotify(title, preview); }
                 const targetId = data.type === 'dm' ? data.sender_id : data.group_id;
                 const badge = document.getElementById('badge-' + data.type + '-' + targetId);
                 if (badge) { badge.textContent = (parseInt(badge.textContent) || 0) + 1; badge.style.display = 'inline-block'; }
