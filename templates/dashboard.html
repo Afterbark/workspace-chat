@@ -524,6 +524,21 @@
                 <button class="modal-btn ghost" id="enable-push-btn" onclick="enablePush()">Enable background push notifications</button>
                 <div class="settings-msg" id="push-msg"></div>
             </div>
+            {% if is_admin %}
+            <div class="settings-row">
+                <label>Admin &mdash; delete users</label>
+                <div id="admin-user-list" style="max-height:220px; overflow-y:auto; border:1px solid var(--border); border-radius:10px;">
+                    {% for u in user_dict.values() %}
+                        {% if u.id != current_user.id %}
+                        <div class="admin-user-row" id="admin-user-{{ u.id }}" style="display:flex; align-items:center; gap:10px; padding:9px 12px; border-bottom:1px solid var(--border);">
+                            <span style="flex:1; font-weight:600;">{{ u.username }}</span>
+                            <button class="remove-btn" onclick="adminDeleteUser({{ u.id }}, '{{ u.username }}')">Delete</button>
+                        </div>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
             <button type="button" class="modal-btn ghost" style="width:100%;" onclick="document.getElementById('settingsModal').style.display='none'">Close</button>
         </div>
     </div>
@@ -1057,6 +1072,30 @@
             const val = document.getElementById('gs-name').value.trim();
             if (val && participantsGroupId) socket.emit('rename_group', { group_id: participantsGroupId, name: val });
         }
+
+        /* ---------- site admin: delete users ---------- */
+        function adminDeleteUser(uid, name) {
+            if (confirm(`Permanently delete "${name}"? This removes their account and all their messages, and cannot be undone.`))
+                socket.emit('delete_user', { user_id: uid });
+        }
+        socket.on('user_deleted', function(data) {
+            ['nav-dm-' + data.user_id, 'checkbox-' + data.user_id, 'admin-user-' + data.user_id].forEach(id => {
+                const el = document.getElementById(id); if (el) el.remove();
+            });
+            delete userNames[data.user_id]; delete userAvatars[data.user_id];
+            onlineUsers.delete(data.user_id);
+            if (currentChatType === 'dm' && currentChatId === data.user_id) {
+                currentChatType = null; currentChatId = null;
+                document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128465;</div><div>This user was deleted.</div></div>';
+                document.getElementById('chat-title').textContent = 'Select a chat to begin';
+                document.getElementById('chat-subtitle').textContent = '';
+                document.getElementById('menu-wrap').style.display = 'none';
+                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
+            }
+            showToast('User deleted', `${data.username} was removed.`);
+        });
+        socket.on('force_logout', function() { window.location.href = '/logout'; });
+        socket.on('admin_error', function(d) { alert(d.message || 'Action failed.'); });
 
         /* ---------- web push ---------- */
         let swRegistration = null;

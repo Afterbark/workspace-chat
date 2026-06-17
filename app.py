@@ -521,6 +521,12 @@ def is_blocked_between(a, b):
         or_(and_(BlockedUser.blocker_id == a, BlockedUser.blocked_id == b),
             and_(BlockedUser.blocker_id == b, BlockedUser.blocked_id == a))).first() is not None
 
+# Site administrators are listed (by username) in the ADMIN_USERNAMES env var.
+_ADMIN_USERNAMES = {n.strip().lower() for n in os.environ.get('ADMIN_USERNAMES', '').split(',') if n.strip()}
+
+def is_site_admin(user):
+    return bool(user and getattr(user, 'username', None) and user.username.lower() in _ADMIN_USERNAMES)
+
 def broadcast_participants(group):
     members, non_members = _participant_lists(group)
     payload = {
@@ -749,7 +755,8 @@ def dashboard():
                            user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
                            vapid_public_key=VAPID_PUBLIC_KEY, muted=muted, archived=archived,
                            online_now=online_now, last_seen=last_seen, blocked_ids=list(blocked_ids),
-                           giphy_api_key=os.environ.get('GIPHY_API_KEY', ''))
+                           giphy_api_key=os.environ.get('GIPHY_API_KEY', ''),
+                           is_admin=is_site_admin(current_user))
 
 @app.route('/update_username', methods=['POST'])
 @login_required
@@ -1474,6 +1481,57 @@ def on_report_user(data):
         reason=(data.get('reason') or '')[:500]))
     db.session.commit()
     emit('report_ack', {'ok': True})
+
+@socketio.on('delete_user')
+def on_delete_user(data):
+    if not is_site_admin(current_user):
+        return
+    uid = int(data['user_id'])
+    target = User.query.get(uid)
+    if not target or target.id == current_user.id or is_site_admin(target):
+        return  # can't delete yourself or another admin
+    uname = target.username
+    try:
+        # every message id that involves this user (as sender or DM receiver)
+        msg_ids = [m.id for m in Message.query.filter(
+            or_(Message.sender_id == uid, Message.receiver_id == uid)
+        ).with_entities(Message.id).all()]
+        if msg_ids:
+            # detach replies pointing at messages we're about to remove
+            Message.query.filter(Message.reply_to_id.in_(msg_ids)).update(
+                {'reply_to_id': None}, synchronize_session=False)
+            MessageRead.query.filter(MessageRead.message_id.in_(msg_ids)).delete(synchronize_session=False)
+            MessageReaction.query.filter(MessageReaction.message_id.in_(msg_ids)).delete(synchronize_session=False)
+        # this user's reads/reactions on any message
+        MessageRead.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        MessageReaction.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        # the messages themselves
+        Message.query.filter(or_(Message.sender_id == uid, Message.receiver_id == uid)).delete(synchronize_session=False)
+        # ancillary records
+        PushSubscription.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        MutedChat.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        ArchivedChat.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        BlockedUser.query.filter(or_(BlockedUser.blocker_id == uid, BlockedUser.blocked_id == uid)).delete(synchronize_session=False)
+        Report.query.filter(or_(Report.reporter_id == uid, Report.reported_user_id == uid)).delete(synchronize_session=False)
+        ScheduledMessage.query.filter_by(sender_id=uid).delete(synchronize_session=False)
+        # group memberships / admin roles
+        for g in list(target.groups):
+            g.members.remove(target)
+        for g in list(target.admin_groups):
+            try:
+                g.admins.remove(target)
+            except Exception:
+                pass
+        ChatGroup.query.filter_by(owner_id=uid).update({'owner_id': None}, synchronize_session=False)
+        db.session.delete(target)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        emit('admin_error', {'message': 'Could not delete user.'})
+        return
+    online_users.pop(uid, None)
+    socketio.emit('user_deleted', {'user_id': uid, 'username': uname})
+    socketio.emit('force_logout', {}, to=f"user_sys_{uid}")
 
 @socketio.on('schedule_message')
 def on_schedule_message(data):
