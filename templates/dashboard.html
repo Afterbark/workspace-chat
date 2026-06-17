@@ -651,14 +651,22 @@
         function escapeHtml(str) {
             return (str || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
         }
+        function mentionCandidates() {
+            if (currentChatType === 'group') return groupMembers;
+            if (currentChatType === 'dm') {
+                const list = [{ id: myUserId, username: myUsername }];
+                if (currentChatId && userNames[currentChatId]) list.push({ id: currentChatId, username: userNames[currentChatId] });
+                return list;
+            }
+            return [];
+        }
         function highlightMentions(escaped) {
             return escaped.replace(/@([A-Za-z0-9_]+)/g, (full, handle) => {
                 const h = handle.toLowerCase();
                 if (currentChatType === 'group' && (h === 'everyone' || h === 'all'))
                     return `<span class="mention me">@${handle}</span>`;
-                const isMember = groupMembers.some(m => m.username.toLowerCase() === h);
-                const isMe = h === myUsername.toLowerCase();
-                if (currentChatType === 'group' && isMember) return `<span class="mention${isMe ? ' me' : ''}">@${handle}</span>`;
+                const hit = mentionCandidates().find(m => m.username.toLowerCase() === h);
+                if (hit) return `<span class="mention${hit.id === myUserId ? ' me' : ''}">@${handle}</span>`;
                 return full;
             });
         }
@@ -1896,12 +1904,12 @@
         }
         function updateMentionBox() {
             const input = document.getElementById('message-input');
-            if (currentChatType !== 'group') { hideMentionBox(); return; }
+            if (!currentChatType) { hideMentionBox(); return; }
             const term = currentMentionTerm(input);
             if (term === null) { hideMentionBox(); return; }
             const t = term.toLowerCase();
-            mentionMatches = groupMembers.filter(m => m.id !== myUserId && m.username.toLowerCase().startsWith(t)).slice(0, 6);
-            if ('everyone'.startsWith(t)) mentionMatches.unshift({ id: 0, username: 'everyone', special: true });
+            mentionMatches = mentionCandidates().filter(m => m.id !== myUserId && m.username.toLowerCase().startsWith(t)).slice(0, 6);
+            if (currentChatType === 'group' && 'everyone'.startsWith(t)) mentionMatches.unshift({ id: 0, username: 'everyone', special: true });
             mentionActive = mentionMatches.length ? 0 : -1;
             renderMentionBox();
         }

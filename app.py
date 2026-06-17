@@ -504,6 +504,22 @@ def extract_mentions(content, group_id):
         return []
     return [u.id for u in group.members if u.username.lower() in handles]
 
+def extract_dm_mentions(content, other_id):
+    """In a DM, @theirname (or @myname) counts as a mention."""
+    if not content:
+        return []
+    handles = set(h.lower() for h in re.findall(r'@([A-Za-z0-9_]+)', content))
+    if not handles:
+        return []
+    ids = []
+    other = User.query.get(other_id)
+    if other and other.username.lower() in handles:
+        ids.append(other.id)
+    return ids
+
+def mentions_for(chat_type, chat_id, content):
+    return extract_mentions(content, chat_id) if chat_type == 'group' else extract_dm_mentions(content, chat_id)
+
 def _participant_lists(group):
     member_ids = {u.id for u in group.members}
     members = [{'id': u.id, 'username': u.username} for u in group.members]
@@ -1235,7 +1251,7 @@ def handle_message(data):
     db.session.add(new_msg)
     db.session.commit()
 
-    mentions = extract_mentions(content, chat_id) if chat_type == 'group' else []
+    mentions = mentions_for(chat_type, chat_id, content)
 
     msg_packet = {
         'msg_id': new_msg.id, 'username': current_user.username, 'message': content,
@@ -1705,7 +1721,7 @@ def deliver_scheduled(sm):
         room = f"group_{sm.chat_id}"
     db.session.add(new_msg)
     db.session.commit()
-    mentions = extract_mentions(sm.content, sm.chat_id) if sm.chat_type == 'group' else []
+    mentions = mentions_for(sm.chat_type, sm.chat_id, sm.content)
     packet = {
         'msg_id': new_msg.id, 'username': sender.username, 'message': sm.content,
         'file_url': None, 'file_type': None, 'file_name': None,
