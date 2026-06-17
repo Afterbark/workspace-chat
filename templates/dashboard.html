@@ -1206,8 +1206,12 @@
             const lastId = parseInt(lastMine.dataset.msgId);
             const readers = Object.values(seenState).filter(s => s.last_read_id >= lastId);
             if (!readers.length) return;
-            const label = currentChatType === 'dm' ? '&#10003;&#10003; Seen' : `&#10003;&#10003; Seen by ${readers.length}`;
-            const el = document.createElement('div'); el.id = 'seen-indicator'; el.innerHTML = label;
+            const names = readers.map(r => r.name);
+            let shown = names.slice(0, 3).join(', ');
+            if (names.length > 3) shown += ` +${names.length - 3} more`;
+            const el = document.createElement('div'); el.id = 'seen-indicator';
+            el.textContent = '✓✓ Seen by ' + shown;
+            el.title = 'Seen by ' + names.join(', ');  // full list on hover
             lastMine.insertAdjacentElement('afterend', el);
         }
 
