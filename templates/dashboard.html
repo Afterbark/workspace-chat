@@ -578,8 +578,11 @@
         }
         function highlightMentions(escaped) {
             return escaped.replace(/@([A-Za-z0-9_]+)/g, (full, handle) => {
-                const isMember = groupMembers.some(m => m.username.toLowerCase() === handle.toLowerCase());
-                const isMe = handle.toLowerCase() === myUsername.toLowerCase();
+                const h = handle.toLowerCase();
+                if (currentChatType === 'group' && (h === 'everyone' || h === 'all'))
+                    return `<span class="mention me">@${handle}</span>`;
+                const isMember = groupMembers.some(m => m.username.toLowerCase() === h);
+                const isMe = h === myUsername.toLowerCase();
                 if (currentChatType === 'group' && isMember) return `<span class="mention${isMe ? ' me' : ''}">@${handle}</span>`;
                 return full;
             });
@@ -1604,7 +1607,13 @@
         function currentMentionTerm(input) { const m = input.value.slice(0, input.selectionStart).match(/@([A-Za-z0-9_]*)$/); return m ? m[1] : null; }
         function renderMentionBox() {
             if (!mentionMatches.length) { hideMentionBox(); return; }
-            mentionBox.innerHTML = mentionMatches.map((m, i) => `<div class="mention-opt ${i === mentionActive ? 'active' : ''}" data-i="${i}"><img src="${avatarFor(m.id, m.username)}" data-uname="${escapeHtml(m.username)}" onerror="avatarFallback(this)"><span>${escapeHtml(m.username)}</span></div>`).join('');
+            mentionBox.innerHTML = mentionMatches.map((m, i) => {
+                const icon = m.special
+                    ? '<span style="width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;">@</span>'
+                    : `<img src="${avatarFor(m.id, m.username)}" data-uname="${escapeHtml(m.username)}" onerror="avatarFallback(this)">`;
+                const label = escapeHtml(m.username) + (m.special ? ' <small style="color:var(--text-soft);">Notify the whole group</small>' : '');
+                return `<div class="mention-opt ${i === mentionActive ? 'active' : ''}" data-i="${i}">${icon}<span>${label}</span></div>`;
+            }).join('');
             mentionBox.querySelectorAll('.mention-opt').forEach(opt => { opt.onclick = () => pickMention(parseInt(opt.dataset.i)); });
             mentionBox.style.display = 'block';
         }
@@ -1623,6 +1632,7 @@
             if (term === null) { hideMentionBox(); return; }
             const t = term.toLowerCase();
             mentionMatches = groupMembers.filter(m => m.id !== myUserId && m.username.toLowerCase().startsWith(t)).slice(0, 6);
+            if ('everyone'.startsWith(t)) mentionMatches.unshift({ id: 0, username: 'everyone', special: true });
             mentionActive = mentionMatches.length ? 0 : -1;
             renderMentionBox();
         }

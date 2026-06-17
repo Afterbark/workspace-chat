@@ -455,14 +455,17 @@ def get_unread(chat_type, chat_id, me_id):
     return len(ids) - read
 
 def extract_mentions(content, group_id):
-    """Return list of user ids mentioned via @username among the group's members."""
+    """Return list of user ids mentioned via @username among the group's members.
+    @everyone / @all mentions every member of the group."""
     if not content or not group_id:
-        return []
-    handles = set(h.lower() for h in re.findall(r'@([A-Za-z0-9_]+)', content))
-    if not handles:
         return []
     group = ChatGroup.query.get(group_id)
     if not group:
+        return []
+    if re.search(r'@everyone\b', content, re.IGNORECASE) or re.search(r'@all\b', content, re.IGNORECASE):
+        return [u.id for u in group.members]
+    handles = set(h.lower() for h in re.findall(r'@([A-Za-z0-9_]+)', content))
+    if not handles:
         return []
     return [u.id for u in group.members if u.username.lower() in handles]
 
