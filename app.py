@@ -165,6 +165,7 @@ class User(UserMixin, db.Model):
     password = db.Column(db.String(150), nullable=False)
     profile_pic = db.Column(db.String(150), default='default')
     last_seen = db.Column(db.DateTime, nullable=True)
+    approved = db.Column(db.Boolean, default=True)
     groups = db.relationship('ChatGroup', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
     admin_groups = db.relationship('ChatGroup', secondary=group_admins, backref=db.backref('admins', lazy='dynamic'))
 
@@ -265,6 +266,15 @@ class ScheduledMessage(db.Model):
     send_at = db.Column(db.DateTime, nullable=False, index=True)
     sent = db.Column(db.Boolean, default=False, index=True)
 
+# Admin approval queue for new signups and password resets.
+class ApprovalRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(10), nullable=False)  # 'signup' or 'reset'
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    username = db.Column(db.String(150))
+    new_password = db.Column(db.String(255), nullable=True)  # pending password hash (reset only)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
 
 def safe_auto_migrate():
     """Create missing tables and add new columns without destroying data.
@@ -303,6 +313,8 @@ def safe_auto_migrate():
             ucols = {c['name'] for c in insp.get_columns('user')}
             if 'last_seen' not in ucols:
                 to_add.append('ALTER TABLE "user" ADD COLUMN last_seen TIMESTAMP')
+            if 'approved' not in ucols:
+                to_add.append('ALTER TABLE "user" ADD COLUMN approved BOOLEAN DEFAULT TRUE')
         except Exception:
             pass
         for stmt in to_add:
@@ -527,6 +539,29 @@ _ADMIN_USERNAMES = {n.strip().lower() for n in os.environ.get('ADMIN_USERNAMES',
 def is_site_admin(user):
     return bool(user and getattr(user, 'username', None) and user.username.lower() in _ADMIN_USERNAMES)
 
+# New signups / password resets need admin approval only if at least one admin exists.
+REQUIRE_APPROVAL = bool(_ADMIN_USERNAMES)
+
+def admin_user_ids():
+    if not _ADMIN_USERNAMES:
+        return []
+    return [u.id for u in User.query.all() if u.username and u.username.lower() in _ADMIN_USERNAMES]
+
+def serialize_request(r):
+    return {'id': r.id, 'kind': r.kind, 'username': r.username, 'user_id': r.user_id,
+            'when': to_amman(r.created_at).strftime('%b %d, %I:%M %p') if r.created_at else ''}
+
+def notify_admins_request(req):
+    payload = {'request': serialize_request(req)}
+    for aid in admin_user_ids():
+        socketio.emit('admin_request', payload, to=f"user_sys_{aid}")
+        send_push_to_user(aid, 'Approval needed', f"{req.kind} request from {req.username}")
+
+def broadcast_admin_requests():
+    reqs = [serialize_request(r) for r in ApprovalRequest.query.order_by(ApprovalRequest.id.desc()).all()]
+    for aid in admin_user_ids():
+        socketio.emit('admin_requests', {'requests': reqs}, to=f"user_sys_{aid}")
+
 def broadcast_participants(group):
     members, non_members = _participant_lists(group)
     payload = {
@@ -678,6 +713,9 @@ def login():
         user = User.query.filter(func.lower(User.username) == func.lower(username)).first()
 
         if user and check_password_hash(user.password, password):
+            if not user.approved:
+                flash('Your account is awaiting admin approval.')
+                return render_template('login.html')
             login_user(user)
             return redirect(url_for('dashboard'))
 
@@ -700,14 +738,24 @@ def register():
             return redirect(url_for('register'))
 
         hashed_pw = generate_password_hash(password, method='pbkdf2:sha256')
-        new_user = User(username=username, password=hashed_pw)
+
+        if REQUIRE_APPROVAL:
+            new_user = User(username=username, password=hashed_pw, approved=False)
+            db.session.add(new_user)
+            db.session.commit()
+            req = ApprovalRequest(kind='signup', user_id=new_user.id, username=username)
+            db.session.add(req)
+            db.session.commit()
+            notify_admins_request(req)
+            flash('Account created! An admin needs to approve it before you can log in.')
+            return redirect(url_for('login'))
+
+        new_user = User(username=username, password=hashed_pw, approved=True)
         db.session.add(new_user)
         db.session.commit()
-
         socketio.emit('new_user_joined', {
             'id': new_user.id, 'username': new_user.username, 'profile_pic': new_user.profile_pic
         })
-
         login_user(new_user)
         return redirect(url_for('dashboard'))
     return render_template('register.html')
@@ -726,7 +774,15 @@ def reset_password():
         user = User.query.filter(func.lower(User.username) == func.lower(username)).first()
 
         if user:
-            user.password = generate_password_hash(new_password, method='pbkdf2:sha256')
+            new_hash = generate_password_hash(new_password, method='pbkdf2:sha256')
+            if REQUIRE_APPROVAL:
+                req = ApprovalRequest(kind='reset', user_id=user.id, username=user.username, new_password=new_hash)
+                db.session.add(req)
+                db.session.commit()
+                notify_admins_request(req)
+                flash('Password reset request sent. An admin must approve it before it takes effect.')
+                return redirect(url_for('login'))
+            user.password = new_hash
             db.session.commit()
             flash('Password successfully reset! You can now log in.')
             return redirect(url_for('login'))
@@ -756,7 +812,9 @@ def dashboard():
                            vapid_public_key=VAPID_PUBLIC_KEY, muted=muted, archived=archived,
                            online_now=online_now, last_seen=last_seen, blocked_ids=list(blocked_ids),
                            giphy_api_key=os.environ.get('GIPHY_API_KEY', ''),
-                           is_admin=is_site_admin(current_user))
+                           is_admin=is_site_admin(current_user),
+                           pending_requests=([serialize_request(r) for r in ApprovalRequest.query.order_by(ApprovalRequest.id.desc()).all()]
+                                             if is_site_admin(current_user) else []))
 
 @app.route('/update_username', methods=['POST'])
 @login_required
@@ -1152,7 +1210,11 @@ def on_mark_read(data):
 def handle_typing(data):
     chat_type, chat_id = data['type'], int(data['id'])
     room = dm_room(current_user.id, chat_id) if chat_type == 'dm' else f"group_{chat_id}"
-    emit('user_typing', {'username': current_user.username}, to=room, include_self=False)
+    emit('user_typing', {
+        'username': current_user.username, 'type': chat_type,
+        'sender_id': current_user.id,
+        'group_id': chat_id if chat_type == 'group' else None,
+    }, to=room, include_self=False)
 
 @socketio.on('send_message')
 def handle_message(data):
@@ -1532,6 +1594,49 @@ def on_delete_user(data):
     online_users.pop(uid, None)
     socketio.emit('user_deleted', {'user_id': uid, 'username': uname})
     socketio.emit('force_logout', {}, to=f"user_sys_{uid}")
+
+@socketio.on('get_admin_requests')
+def on_get_admin_requests():
+    if not is_site_admin(current_user):
+        return
+    reqs = ApprovalRequest.query.order_by(ApprovalRequest.id.desc()).all()
+    emit('admin_requests', {'requests': [serialize_request(r) for r in reqs]})
+
+@socketio.on('approve_request')
+def on_approve_request(data):
+    if not is_site_admin(current_user):
+        return
+    r = ApprovalRequest.query.get(int(data['id']))
+    if not r:
+        return
+    user = User.query.get(r.user_id)
+    if r.kind == 'signup':
+        if user:
+            user.approved = True
+            db.session.commit()
+            socketio.emit('new_user_joined', {'id': user.id, 'username': user.username, 'profile_pic': user.profile_pic})
+    elif r.kind == 'reset':
+        if user and r.new_password:
+            user.password = r.new_password
+            db.session.commit()
+    db.session.delete(r)
+    db.session.commit()
+    broadcast_admin_requests()
+
+@socketio.on('decline_request')
+def on_decline_request(data):
+    if not is_site_admin(current_user):
+        return
+    r = ApprovalRequest.query.get(int(data['id']))
+    if not r:
+        return
+    if r.kind == 'signup':
+        user = User.query.get(r.user_id)
+        if user and not user.approved:  # delete the never-approved account
+            db.session.delete(user)
+    db.session.delete(r)
+    db.session.commit()
+    broadcast_admin_requests()
 
 @socketio.on('schedule_message')
 def on_schedule_message(data):

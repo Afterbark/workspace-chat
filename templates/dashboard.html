@@ -240,6 +240,11 @@
         #gif-results img:hover { outline: 2px solid var(--accent); }
         .gif-note { grid-column: 1 / -1; color: var(--text-soft); font-size: 13px; text-align: center; padding: 24px; }
 
+        #requests-list { max-height: 55vh; overflow-y: auto; }
+        .req-row { display: flex; align-items: center; gap: 8px; padding: 11px 4px; border-bottom: 1px solid var(--border); }
+        .req-row .req-info { flex: 1; min-width: 0; }
+        .req-row .req-sub { font-size: 12px; color: var(--text-soft); }
+
         /* pinned banner */
         #pinned-banner { display: none; background: var(--panel); border-bottom: 1px solid var(--border);
             padding: 8px 18px; font-size: 13px; color: var(--text); align-items: center; gap: 10px; }
@@ -347,6 +352,9 @@
                     </label>
                 </form>
             </div>
+            {% if is_admin %}
+            <button class="icon-btn" id="requests-btn" title="Approval requests" onclick="openRequests()" style="position:relative;">&#128276;<span class="badge" id="requests-badge" style="position:absolute; top:-3px; right:-3px; display:none; background:var(--danger);">0</span></button>
+            {% endif %}
             <button class="icon-btn" title="Settings" onclick="openSettings()">&#9881;</button>
             <button class="icon-btn" id="theme-btn" title="Toggle theme" onclick="toggleTheme()">&#127769;</button>
         </div>
@@ -548,6 +556,14 @@
         </div>
     </div>
 
+    <div id="requestsModal" class="modal">
+        <div class="modal-content">
+            <h3>Approval Requests</h3>
+            <div id="requests-list"></div>
+            <button type="button" class="modal-btn ghost" style="width:100%; margin-top:12px;" onclick="document.getElementById('requestsModal').style.display='none'">Close</button>
+        </div>
+    </div>
+
     <div id="gifModal" class="modal">
         <div class="modal-content">
             <h3>Send a GIF</h3>
@@ -598,6 +614,8 @@
         const blockedIds = new Set({{ blocked_ids|tojson }});
         const lastSeenMap = {{ last_seen|tojson }};
         const initialOnline = {{ online_now|tojson }};
+        const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+        let pendingRequests = {{ pending_requests|tojson }};
     </script>
 
     <script>
@@ -1101,6 +1119,50 @@
         });
         socket.on('force_logout', function() { window.location.href = '/logout'; });
         socket.on('admin_error', function(d) { alert(d.message || 'Action failed.'); });
+
+        /* ---------- admin approval inbox ---------- */
+        function renderRequestsBadge() {
+            const b = document.getElementById('requests-badge');
+            if (!b) return;
+            if (pendingRequests.length) { b.textContent = pendingRequests.length; b.style.display = 'inline-block'; }
+            else b.style.display = 'none';
+        }
+        function renderRequestsList() {
+            const box = document.getElementById('requests-list');
+            if (!box) return;
+            if (!pendingRequests.length) { box.innerHTML = '<div class="search-empty">No pending requests.</div>'; return; }
+            box.innerHTML = '';
+            pendingRequests.forEach(r => {
+                const label = r.kind === 'signup' ? 'New account' : 'Password reset';
+                const row = document.createElement('div');
+                row.className = 'req-row';
+                row.innerHTML = `<div class="req-info"><b>${escapeHtml(r.username)}</b><div class="req-sub">${label} · ${escapeHtml(r.when)}</div></div>
+                    <button class="modal-btn primary" style="padding:6px 12px;" onclick="approveReq(${r.id})">Approve</button>
+                    <button class="remove-btn" onclick="declineReq(${r.id})">Decline</button>`;
+                box.appendChild(row);
+            });
+        }
+        function openRequests() {
+            socket.emit('get_admin_requests');
+            document.getElementById('requestsModal').style.display = 'block';
+            renderRequestsList();
+        }
+        function approveReq(id) { socket.emit('approve_request', { id: id }); }
+        function declineReq(id) { socket.emit('decline_request', { id: id }); }
+        socket.on('admin_request', function(data) {
+            if (data.request && !pendingRequests.some(r => r.id === data.request.id)) pendingRequests.unshift(data.request);
+            renderRequestsBadge();
+            const lbl = data.request.kind === 'signup' ? 'New account' : 'Password reset';
+            showToast('Approval needed', `${lbl}: ${data.request.username}`, true);
+            playNotif(true);
+            if (document.getElementById('requestsModal').style.display === 'block') renderRequestsList();
+        });
+        socket.on('admin_requests', function(data) {
+            pendingRequests = data.requests || [];
+            renderRequestsBadge();
+            if (document.getElementById('requestsModal').style.display === 'block') renderRequestsList();
+        });
+        renderRequestsBadge();
 
         /* ---------- web push ---------- */
         let swRegistration = null;
@@ -1614,6 +1676,10 @@
         });
 
         socket.on('user_typing', function(data) {
+            // only show typing for the conversation that's actually open
+            const match = (data.type === 'dm' && currentChatType === 'dm' && data.sender_id === currentChatId) ||
+                          (data.type === 'group' && currentChatType === 'group' && data.group_id === currentChatId);
+            if (!match) return;
             const indicator = document.getElementById('typing-indicator');
             indicator.style.display = 'block'; indicator.textContent = `${data.username} is typing...`;
             clearTimeout(hideTypingTimer);
