@@ -181,6 +181,10 @@
             font-size: 22px; font-weight: 700; color: var(--accent); pointer-events: none; }
         #drop-overlay.show { display: flex; }
 
+        #new-msg-pill { position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
+            background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 8px 16px;
+            font-size: 13px; font-weight: 600; box-shadow: var(--shadow); cursor: pointer; display: none; z-index: 40; }
+
         #mention-box { position: absolute; bottom: 76px; left: 18px; right: 18px; max-width: 320px;
             background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
             overflow: hidden; display: none; z-index: 50; }
@@ -422,6 +426,7 @@
             </div>
         </div>
         <div id="drop-overlay">Drop to send file</div>
+        <button id="new-msg-pill" onclick="jumpToBottom()">&#8595; New messages</button>
 
         <div id="typing-indicator"></div>
 
@@ -1533,6 +1538,7 @@
             renderedMessages = new Set(); oldestRenderedId = null; hasMoreOlder = false;
             seenState = {}; groupMembers = []; pinnedList = [];
             document.getElementById('pinned-banner').style.display = 'none';
+            document.getElementById('new-msg-pill').style.display = 'none';
             clearComposerContext(); clearPendingAttachment(); hideMentionBox();
 
             document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
@@ -1593,12 +1599,18 @@
             const sp = document.getElementById('load-older-spinner'); if (sp) sp.style.display = 'none';
         });
 
+        function showNewMsgPill() { document.getElementById('new-msg-pill').style.display = 'block'; }
+        function hideNewMsgPill() { document.getElementById('new-msg-pill').style.display = 'none'; }
+        function jumpToBottom() { const cb = document.getElementById('chat-box'); cb.scrollTop = cb.scrollHeight; hideNewMsgPill(); }
+
         document.getElementById('chat-box').addEventListener('scroll', function() {
             if (this.scrollTop < 80 && hasMoreOlder && !loadingOlder && oldestRenderedId !== null) {
                 loadingOlder = true;
                 const sp = document.getElementById('load-older-spinner'); if (sp) sp.style.display = 'block';
                 socket.emit('load_older', { type: currentChatType, id: currentChatId, before_id: oldestRenderedId });
             }
+            // hide the "new messages" pill once the reader returns to the bottom
+            if ((this.scrollHeight - this.scrollTop - this.clientHeight) < 140) hideNewMsgPill();
         });
 
         socket.on('user_typing', function(data) {
@@ -1618,16 +1630,19 @@
             const mentionsMe = Array.isArray(data.mentions) && data.mentions.includes(myUserId);
 
             if (inThisChat) {
+                const chatBox = document.getElementById('chat-box');
+                const nearBottom = (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight) < 140;
                 appendMessage({
                     msg_id: data.msg_id, sender: data.username, sender_id: data.sender_id, content: data.message,
                     file_url: data.file_url, file_type: data.file_type, file_name: data.file_name,
                     timestamp: data.timestamp, ts_iso: data.ts_iso, reply_to: data.reply_to, reactions: data.reactions || [],
                     edited: data.edited, forwarded: data.forwarded, preview: data.preview, pinned: data.pinned
                 });
-                const chatBox = document.getElementById('chat-box');
-                chatBox.scrollTop = chatBox.scrollHeight;
                 document.getElementById('typing-indicator').style.display = 'none';
                 updateSeenIndicator();
+                // only snap to bottom if the reader is already there (or it's their own message)
+                if (nearBottom || data.sender_id === myUserId) { chatBox.scrollTop = chatBox.scrollHeight; hideNewMsgPill(); }
+                else showNewMsgPill();
                 if (data.sender_id !== myUserId) {
                     const mk = data.type === 'dm' ? `dm:${data.sender_id}` : `group:${data.group_id}`;
                     if (!mutedChats.has(mk)) {
