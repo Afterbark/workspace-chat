@@ -8,6 +8,7 @@
     <meta name="theme-color" content="#2563eb">
     <link rel="apple-touch-icon" href="/static/icon.svg">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@1/index.js"></script>
     <style>
         :root {
             --bg: #f0f2f5; --panel: #ffffff; --sidebar: #ffffff;
@@ -223,6 +224,11 @@
         .search-hit .sh-text { margin-top: 3px; font-size: 14px; }
         .search-empty { color: var(--text-soft); text-align: center; padding: 24px; }
 
+        #gif-results { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; max-height: 50vh; overflow-y: auto; margin-top: 10px; }
+        #gif-results img { width: 100%; border-radius: 8px; cursor: pointer; background: var(--bg); display: block; }
+        #gif-results img:hover { outline: 2px solid var(--accent); }
+        .gif-note { grid-column: 1 / -1; color: var(--text-soft); font-size: 13px; text-align: center; padding: 24px; }
+
         /* pinned banner */
         #pinned-banner { display: none; background: var(--panel); border-bottom: 1px solid var(--border);
             padding: 8px 18px; font-size: 13px; color: var(--text); align-items: center; gap: 10px; }
@@ -285,11 +291,9 @@
         .compose-btn.recording { background: var(--danger); color: #fff; animation: pulse 1s infinite; }
 
         /* compose emoji picker */
-        #emoji-picker { position: absolute; bottom: 76px; left: 18px; background: var(--panel); border: 1px solid var(--border);
-            border-radius: 12px; box-shadow: var(--shadow); padding: 8px; display: none; grid-template-columns: repeat(8, 1fr);
-            gap: 2px; z-index: 55; max-width: 320px; }
-        #emoji-picker span { font-size: 22px; cursor: pointer; padding: 3px; border-radius: 6px; text-align: center; }
-        #emoji-picker span:hover { background: var(--accent-soft); }
+        #emoji-picker { position: absolute; bottom: 76px; left: 18px; display: none; z-index: 55;
+            box-shadow: var(--shadow); border-radius: 12px; overflow: hidden; }
+        #emoji-picker emoji-picker { height: 340px; --background: var(--panel); --border-color: var(--border); }
 
         /* admin badges in participants */
         #participants-list li .role-tag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
@@ -428,6 +432,7 @@
                 <button id="attach-btn" class="compose-btn" onclick="document.getElementById('chat-file-input').click();" disabled>&#128206;</button>
                 <input type="file" id="chat-file-input" onchange="handleFiles(this.files)">
                 <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled>&#128512;</button>
+                <button id="gif-btn" class="compose-btn" onclick="openGifPicker()" disabled title="Send a GIF" style="font-size:12px;font-weight:800;">GIF</button>
                 <button id="mic-btn" class="compose-btn" onclick="toggleRecording()" disabled title="Record voice message">&#127908;</button>
                 <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
                 <button id="schedule-btn" class="compose-btn" onclick="openSchedule()" disabled title="Schedule message">&#128340;</button>
@@ -499,11 +504,25 @@
                 <div class="settings-msg" id="password-msg"></div>
             </div>
             <div class="settings-row">
+                <label>Notification sound volume</label>
+                <input type="range" id="vol-slider" min="0" max="100" value="70" style="width:100%; accent-color: var(--accent);" oninput="setNotifVolume(this.value)">
+            </div>
+            <div class="settings-row">
                 <label>Notifications</label>
                 <button class="modal-btn ghost" id="enable-push-btn" onclick="enablePush()">Enable background push notifications</button>
                 <div class="settings-msg" id="push-msg"></div>
             </div>
             <button type="button" class="modal-btn ghost" style="width:100%;" onclick="document.getElementById('settingsModal').style.display='none'">Close</button>
+        </div>
+    </div>
+
+    <div id="gifModal" class="modal">
+        <div class="modal-content">
+            <h3>Send a GIF</h3>
+            <input type="text" id="gif-search" placeholder="Search GIFs..." oninput="searchGifs(this.value)">
+            <div id="gif-results"></div>
+            <div style="text-align:right; font-size:11px; color:var(--text-soft); margin-top:6px;">Powered by GIPHY</div>
+            <button type="button" class="modal-btn ghost" style="width:100%; margin-top:10px;" onclick="document.getElementById('gifModal').style.display='none'">Close</button>
         </div>
     </div>
 
@@ -536,6 +555,12 @@
             {% endfor %}
         };
         const VAPID_PUBLIC_KEY = "{{ vapid_public_key }}";
+        const GIPHY_API_KEY = "{{ giphy_api_key }}";
+        const userNames = {
+            {% for user in user_dict.values() %}
+                {{ user.id }}: "{{ user.username }}"{% if not loop.last %},{% endif %}
+            {% endfor %}
+        };
         const mutedChats = new Set({{ muted|tojson }});
         const archivedChats = new Set({{ archived|tojson }});
         const blockedIds = new Set({{ blocked_ids|tojson }});
@@ -609,6 +634,8 @@
 
         /* ---------- audio + notifications ---------- */
         let audioCtx = null, notifAsked = false;
+        let notifVolume = 0.7;
+        try { const v = localStorage.getItem('notifVolume'); if (v !== null) notifVolume = parseFloat(v); } catch (e) {}
         function initInteractions() {
             if (!audioCtx) { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
@@ -618,17 +645,24 @@
         }
         document.addEventListener('click', initInteractions);
         function playNotif(strong) {
-            if (!audioCtx) return;
+            if (!audioCtx || notifVolume <= 0) return;
+            const peak = 0.25 * notifVolume;
             const now = audioCtx.currentTime; const tones = strong ? [880, 1320] : [660, 990];
             tones.forEach((freq, i) => {
                 const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
                 osc.type = 'sine'; osc.frequency.value = freq; osc.connect(gain); gain.connect(audioCtx.destination);
                 const t = now + i * 0.12;
                 gain.gain.setValueAtTime(0.0001, t);
-                gain.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+                gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.02);
                 gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
                 osc.start(t); osc.stop(t + 0.2);
             });
+        }
+        function setNotifVolume(v) {
+            notifVolume = Math.max(0, Math.min(1, v / 100));
+            try { localStorage.setItem('notifVolume', notifVolume); } catch (e) {}
+            initInteractions();
+            playNotif(false); // preview
         }
         function browserNotify(title, body) {
             if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
@@ -725,6 +759,8 @@
                 const chip = document.createElement('span');
                 chip.className = 'reaction-chip' + (mine ? ' mine' : '');
                 chip.innerHTML = `${r.emoji} <b>${r.user_ids.length}</b>`;
+                const names = r.user_ids.map(id => id === myUserId ? 'You' : (userNames[id] || 'Someone'));
+                chip.title = names.join(', ');
                 chip.onclick = () => socket.emit('toggle_reaction', { message_id: parseInt(row.dataset.msgId), emoji: r.emoji });
                 box.appendChild(chip);
             });
@@ -979,6 +1015,7 @@
             document.getElementById('password-msg').textContent = '';
             document.getElementById('set-current-pw').value = '';
             document.getElementById('set-new-pw').value = '';
+            document.getElementById('vol-slider').value = Math.round(notifVolume * 100);
             updatePushButton();
             document.getElementById('settingsModal').style.display = 'block';
         }
@@ -1138,20 +1175,25 @@
         })();
 
         /* ---------- compose emoji picker ---------- */
-        const EMOJIS = ['😀','😂','😍','😎','😭','😡','👍','👎','🙏','🎉','❤️','🔥','✅','❌','💯','🤔','😅','😉','🙌','👀','🚀','💡','📌','⭐','😴','🤝','👏','💪','🍕','☕'];
         (function initEmojiPicker() {
-            const p = document.getElementById('emoji-picker');
-            p.innerHTML = EMOJIS.map(e => `<span>${e}</span>`).join('');
-            p.querySelectorAll('span').forEach(s => s.onclick = () => {
+            const container = document.getElementById('emoji-picker');
+            const picker = document.createElement('emoji-picker');
+            container.appendChild(picker);
+            picker.addEventListener('emoji-click', e => {
+                const emoji = e.detail.unicode || (e.detail.emoji && e.detail.emoji.unicode);
+                if (!emoji) return;
                 const input = document.getElementById('message-input');
-                const pos = input.selectionStart || input.value.length;
-                input.value = input.value.slice(0, pos) + s.textContent + input.value.slice(pos);
-                input.focus(); input.selectionStart = input.selectionEnd = pos + s.textContent.length;
+                const pos = input.selectionStart != null ? input.selectionStart : input.value.length;
+                input.value = input.value.slice(0, pos) + emoji + input.value.slice(pos);
+                input.focus(); input.selectionStart = input.selectionEnd = pos + emoji.length;
             });
         })();
         function toggleEmojiPicker() {
             const p = document.getElementById('emoji-picker');
-            p.style.display = p.style.display === 'grid' ? 'none' : 'grid';
+            const show = p.style.display !== 'block';
+            p.style.display = show ? 'block' : 'none';
+            const picker = p.querySelector('emoji-picker');
+            if (picker) picker.className = (document.documentElement.getAttribute('data-theme') === 'dark') ? 'dark' : 'light';
         }
 
         /* ---------- voice messages ---------- */
@@ -1193,6 +1235,62 @@
         socket.on('scheduled_ack', function(data) {
             const d = new Date(data.send_at);
             showToast('Scheduled', `Message will send ${d.toLocaleString()}`);
+        });
+
+        /* ---------- GIF picker (Giphy) ---------- */
+        let gifSearchTimer = null;
+        function openGifPicker() {
+            if (!GIPHY_API_KEY) { alert('GIF search is not set up yet — a GIPHY_API_KEY needs to be configured on the server.'); return; }
+            if (!currentChatId) return;
+            document.getElementById('gif-search').value = '';
+            document.getElementById('gifModal').style.display = 'block';
+            loadGifs('');
+            document.getElementById('gif-search').focus();
+        }
+        function searchGifs(q) {
+            clearTimeout(gifSearchTimer);
+            gifSearchTimer = setTimeout(() => loadGifs(q.trim()), 300);
+        }
+        function loadGifs(q) {
+            const box = document.getElementById('gif-results');
+            box.innerHTML = '<div class="gif-note">Loading…</div>';
+            const base = q
+                ? `https://api.giphy.com/v1/gifs/search?q=${encodeURIComponent(q)}&`
+                : 'https://api.giphy.com/v1/gifs/trending?';
+            fetch(`${base}api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`)
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.data || !data.data.length) { box.innerHTML = '<div class="gif-note">No GIFs found.</div>'; return; }
+                    box.innerHTML = '';
+                    data.data.forEach(g => {
+                        const thumb = g.images.fixed_width && g.images.fixed_width.url;
+                        const full = (g.images.downsized_medium && g.images.downsized_medium.url) || (g.images.original && g.images.original.url);
+                        if (!thumb || !full) return;
+                        const img = document.createElement('img');
+                        img.src = thumb; img.loading = 'lazy'; img.alt = 'GIF';
+                        img.onclick = () => sendGif(full);
+                        box.appendChild(img);
+                    });
+                })
+                .catch(() => { box.innerHTML = '<div class="gif-note">Could not load GIFs.</div>'; });
+        }
+        function sendGif(url) {
+            if (!currentChatId) return;
+            socket.emit('send_gif', { type: currentChatType, id: currentChatId, url: url });
+            document.getElementById('gifModal').style.display = 'none';
+        }
+
+        /* ---------- paste image from clipboard ---------- */
+        document.getElementById('message-input').addEventListener('paste', function(e) {
+            const items = (e.clipboardData || window.clipboardData) && (e.clipboardData || window.clipboardData).items;
+            if (!items) return;
+            for (const it of items) {
+                if (it.type && it.type.indexOf('image') === 0) {
+                    const file = it.getAsFile();
+                    if (file && currentChatId) { e.preventDefault(); handleFiles([file]); }
+                    return;
+                }
+            }
         });
 
         /* ---------- seen indicator ---------- */
@@ -1410,7 +1508,7 @@
             }
 
             document.getElementById('chat-box').innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
-            ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'mic-btn', 'schedule-btn'].forEach(bid => document.getElementById(bid).disabled = false);
+            ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'schedule-btn'].forEach(bid => document.getElementById(bid).disabled = false);
             document.getElementById('menu-wrap').style.display = '';
             document.getElementById('chat-menu').style.display = 'none';
             document.getElementById('emoji-picker').style.display = 'none';

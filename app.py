@@ -748,7 +748,8 @@ def dashboard():
     return render_template('dashboard.html', users=all_users, groups=user_groups,
                            user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
                            vapid_public_key=VAPID_PUBLIC_KEY, muted=muted, archived=archived,
-                           online_now=online_now, last_seen=last_seen, blocked_ids=list(blocked_ids))
+                           online_now=online_now, last_seen=last_seen, blocked_ids=list(blocked_ids),
+                           giphy_api_key=os.environ.get('GIPHY_API_KEY', ''))
 
 @app.route('/update_username', methods=['POST'])
 @login_required
@@ -1193,6 +1194,56 @@ def handle_message(data):
 
     # Fetch a link preview in the background and push it to the room when ready.
     maybe_fetch_preview(content, room, new_msg.id)
+
+def _is_allowed_gif(url):
+    try:
+        p = urlparse(url)
+        if p.scheme != 'https' or not p.hostname:
+            return False
+        host = p.hostname.lower()
+        return host.endswith('giphy.com') or host.endswith('tenor.com') or host.endswith('tenor.co')
+    except Exception:
+        return False
+
+@socketio.on('send_gif')
+def on_send_gif(data):
+    ct, cid = data['type'], int(data['id'])
+    url = data.get('url') or ''
+    if not _is_allowed_gif(url):
+        return
+    if ct == 'dm' and is_blocked_between(current_user.id, cid):
+        return
+    if ct == 'dm':
+        new_msg = Message(sender_id=current_user.id, receiver_id=cid, content="",
+                          file_url=url, file_type='image', file_name='gif.gif')
+        room = dm_room(current_user.id, cid)
+    else:
+        new_msg = Message(sender_id=current_user.id, group_id=cid, content="",
+                          file_url=url, file_type='image', file_name='gif.gif')
+        room = f"group_{cid}"
+    db.session.add(new_msg)
+    db.session.commit()
+    packet = {
+        'msg_id': new_msg.id, 'username': current_user.username, 'message': "",
+        'file_url': url, 'file_type': 'image', 'file_name': 'gif.gif',
+        'type': ct, 'group_id': cid if ct == 'group' else None,
+        'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
+        'ts_iso': iso_amman(new_msg.timestamp), 'mentions': [],
+        'reply_to': None, 'reactions': [], 'edited': False,
+        'pinned': False, 'forwarded': False, 'preview': None
+    }
+    if ct == 'dm':
+        emit('receive_message', packet, to=f"user_sys_{cid}")
+        push_to_offline_recipients([cid], current_user.username, 'Sent a GIF', 'dm', current_user.id)
+    else:
+        group = ChatGroup.query.get(cid)
+        packet['group_name'] = group.name
+        for u in group.members:
+            if u.id != current_user.id:
+                emit('receive_message', packet, to=f"user_sys_{u.id}")
+        push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
+                                   f"{current_user.username} sent a GIF", 'group', cid)
+    emit('receive_message', packet, to=room)
 
 @socketio.on('edit_message')
 def on_edit_message(data):
