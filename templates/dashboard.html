@@ -1299,7 +1299,7 @@
                 if (myUserId === groupOwnerId && !isOwner)
                     roleBtn = isAdmin ? `<button class="role-btn" onclick="setAdmin(${m.id}, false)">Demote</button>`
                                       : `<button class="role-btn" onclick="setAdmin(${m.id}, true)">Make admin</button>`;
-                const removeBtn = (canManageGroup && !isMe && !isOwner) ? `<button class="remove-btn" data-id="${m.id}" data-name="${escapeHtml(m.username)}">Remove</button>` : '';
+                const removeBtn = (!isMe && !isOwner) ? `<button class="remove-btn" data-id="${m.id}" data-name="${escapeHtml(m.username)}">Remove</button>` : '';
                 li.innerHTML = `
                     <img src="${avatarFor(m.id, m.username)}" data-uname="${escapeHtml(m.username)}" onerror="avatarFallback(this)">
                     <span class="p-name">${escapeHtml(m.username)}${isMe ? ' <span class="you-tag">(You)</span>' : ''}</span>
@@ -1308,7 +1308,6 @@
             });
             list.querySelectorAll('.remove-btn').forEach(btn => { btn.onclick = () => removeParticipant(parseInt(btn.dataset.id), btn.dataset.name); });
             const row = document.getElementById('add-participant-row');
-            if (!canManageGroup) { row.innerHTML = '<div class="empty-note">Only admins can add members.</div>'; return; }
             if (!nonMembers.length) row.innerHTML = '<div class="empty-note">Everyone is already in this group.</div>';
             else row.innerHTML = `<select id="add-participant-select">${nonMembers.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join('')}</select><button class="modal-btn primary" onclick="addParticipant()">Add</button>`;
         }

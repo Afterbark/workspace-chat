@@ -1007,7 +1007,7 @@ def on_set_group_admin(data):
 def on_add_participant(data):
     group = ChatGroup.query.get(int(data['group_id']))
     user = User.query.get(int(data['user_id']))
-    if not group or not user or not is_group_admin(group, current_user):
+    if not group or not user or current_user not in group.members:
         return
     if user in group.members:
         return
@@ -1020,7 +1020,7 @@ def on_add_participant(data):
 def on_remove_participant(data):
     group = ChatGroup.query.get(int(data['group_id']))
     user = User.query.get(int(data['user_id']))
-    if not group or not user or not is_group_admin(group, current_user):
+    if not group or not user or current_user not in group.members:
         return
     if user not in group.members or user.id == group.owner_id:
         return  # can't remove the owner
