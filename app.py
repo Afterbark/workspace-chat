@@ -8,7 +8,30 @@ import ipaddress
 import socket as _socket
 import mimetypes
 from urllib.parse import urlparse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# App display timezone: Jordan (Asia/Amman, UTC+3, no DST since 2022).
+try:
+    from zoneinfo import ZoneInfo
+    APP_TZ = ZoneInfo('Asia/Amman')
+except Exception:
+    APP_TZ = timezone(timedelta(hours=3))
+UTC_TZ = timezone.utc
+
+def to_amman(dt):
+    """Treat a stored (UTC) datetime as Jordan local time."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC_TZ)
+    return dt.astimezone(APP_TZ)
+
+def fmt_time(dt):
+    return to_amman(dt).strftime('%I:%M %p')
+
+def iso_amman(dt):
+    # naive ISO carrying Jordan wall-clock time (so client date separators match)
+    return to_amman(dt).replace(tzinfo=None).isoformat()
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, inspect, text, and_, or_
@@ -346,8 +369,8 @@ def serialize_message(m):
         'file_url': None if m.is_deleted else m.file_url,
         'file_type': None if m.is_deleted else m.file_type,
         'file_name': None if m.is_deleted else m.file_name,
-        'timestamp': m.timestamp.strftime('%I:%M %p'),
-        'ts_iso': m.timestamp.isoformat(),
+        'timestamp': fmt_time(m.timestamp),
+        'ts_iso': iso_amman(m.timestamp),
         'edited': bool(m.edited),
         'is_deleted': bool(m.is_deleted),
         'reply_to': reply_preview(m.reply_to_id),
@@ -720,7 +743,7 @@ def dashboard():
     muted = [f"{m.chat_type}:{m.chat_id}" for m in MutedChat.query.filter_by(user_id=current_user.id).all()]
     archived = [f"{a.chat_type}:{a.chat_id}" for a in ArchivedChat.query.filter_by(user_id=current_user.id).all()]
     online_now = list(online_users.keys())
-    last_seen = {u.id: (u.last_seen.isoformat() if u.last_seen else None) for u in all_users}
+    last_seen = {u.id: (iso_amman(u.last_seen) if u.last_seen else None) for u in all_users}
 
     return render_template('dashboard.html', users=all_users, groups=user_groups,
                            user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
@@ -885,8 +908,8 @@ def upload_chat_file():
             'msg_id': new_msg.id, 'username': current_user.username, 'message': "",
             'file_url': file_url, 'file_type': file_category, 'file_name': filename,
             'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
-            'sender_id': current_user.id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
-            'ts_iso': new_msg.timestamp.isoformat(), 'mentions': [],
+            'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
+            'ts_iso': iso_amman(new_msg.timestamp), 'mentions': [],
             'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
             'pinned': False, 'forwarded': False, 'preview': None
         }
@@ -969,7 +992,7 @@ def on_disconnect():
                 if u:
                     u.last_seen = datetime.now()
                     db.session.commit()
-                    ls = u.last_seen.isoformat()
+                    ls = iso_amman(u.last_seen)
             except Exception:
                 db.session.rollback()
             socketio.emit('presence_update', {'user_id': uid, 'online': False, 'last_seen': ls})
@@ -1062,7 +1085,7 @@ def on_join(data):
             payload['can_manage'] = is_group_admin(group, current_user)
     else:
         other = User.query.get(chat_id)
-        payload['last_seen'] = other.last_seen.isoformat() if (other and other.last_seen) else None
+        payload['last_seen'] = iso_amman(other.last_seen) if (other and other.last_seen) else None
 
     emit('load_history', payload)
 
@@ -1148,8 +1171,8 @@ def handle_message(data):
         'msg_id': new_msg.id, 'username': current_user.username, 'message': content,
         'file_url': None, 'file_type': None, 'file_name': None,
         'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
-        'sender_id': current_user.id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
-        'ts_iso': new_msg.timestamp.isoformat(), 'mentions': mentions,
+        'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
+        'ts_iso': iso_amman(new_msg.timestamp), 'mentions': mentions,
         'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
         'pinned': False, 'forwarded': False, 'preview': None
     }
@@ -1253,7 +1276,7 @@ def on_search(data):
         results.append({
             'msg_id': m.id, 'type': ctype, 'chat_id': cid, 'chat_name': cname,
             'sender': sender.username if sender else '?', 'content': m.content,
-            'when': m.timestamp.strftime('%b %d, %I:%M %p'),
+            'when': to_amman(m.timestamp).strftime('%b %d, %I:%M %p'),
         })
     emit('search_results', {'query': query, 'results': results})
 
@@ -1328,8 +1351,8 @@ def on_forward_message(data):
         'msg_id': new_msg.id, 'username': current_user.username, 'message': new_msg.content or "",
         'file_url': new_msg.file_url, 'file_type': new_msg.file_type, 'file_name': new_msg.file_name,
         'type': target_type, 'group_id': target_id if target_type == 'group' else None,
-        'sender_id': current_user.id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
-        'ts_iso': new_msg.timestamp.isoformat(), 'mentions': [],
+        'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
+        'ts_iso': iso_amman(new_msg.timestamp), 'mentions': [],
         'reply_to': None, 'reactions': [], 'edited': False,
         'pinned': False, 'forwarded': True, 'preview': None
     }
@@ -1408,7 +1431,9 @@ def on_schedule_message(data):
     if not content:
         return
     try:
-        send_at = datetime.fromisoformat(data['send_at'])
+        send_at = datetime.fromisoformat(data['send_at'].replace('Z', '+00:00'))
+        if send_at.tzinfo is not None:
+            send_at = send_at.astimezone(UTC_TZ).replace(tzinfo=None)  # store naive UTC
     except Exception:
         return
     if ct == 'dm' and is_blocked_between(current_user.id, cid):
@@ -1435,7 +1460,7 @@ def export_chat():
     lines = [f"Chat export: {title}", "=" * 40, ""]
     for m in msgs:
         sender = User.query.get(m.sender_id)
-        ts = m.timestamp.strftime('%Y-%m-%d %H:%M')
+        ts = to_amman(m.timestamp).strftime('%Y-%m-%d %H:%M')
         if m.is_deleted:
             body = "[deleted]"
         elif m.content:
@@ -1471,8 +1496,8 @@ def deliver_scheduled(sm):
         'msg_id': new_msg.id, 'username': sender.username, 'message': sm.content,
         'file_url': None, 'file_type': None, 'file_name': None,
         'type': sm.chat_type, 'group_id': sm.chat_id if sm.chat_type == 'group' else None,
-        'sender_id': sm.sender_id, 'timestamp': new_msg.timestamp.strftime('%I:%M %p'),
-        'ts_iso': new_msg.timestamp.isoformat(), 'mentions': mentions,
+        'sender_id': sm.sender_id, 'timestamp': fmt_time(new_msg.timestamp),
+        'ts_iso': iso_amman(new_msg.timestamp), 'mentions': mentions,
         'reply_to': None, 'reactions': [], 'edited': False,
         'pinned': False, 'forwarded': False, 'preview': None
     }
