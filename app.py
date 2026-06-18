@@ -272,6 +272,14 @@ class ScheduledMessage(db.Model):
     send_at = db.Column(db.DateTime, nullable=False, index=True)
     sent = db.Column(db.Boolean, default=False, index=True)
 
+# Audit log of admin actions.
+class AdminLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    actor = db.Column(db.String(150))
+    action = db.Column(db.String(60))
+    detail = db.Column(db.String(300))
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
 # Admin approval queue for new signups and password resets.
 class ApprovalRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -583,6 +591,13 @@ def broadcast_admin_requests():
     reqs = [serialize_request(r) for r in ApprovalRequest.query.order_by(ApprovalRequest.id.desc()).all()]
     for aid in admin_user_ids():
         socketio.emit('admin_requests', {'requests': reqs}, to=f"user_sys_{aid}")
+
+def log_admin(action, detail=''):
+    try:
+        db.session.add(AdminLog(actor=current_user.username, action=action, detail=detail[:300]))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 def broadcast_participants(group):
     members, non_members = _participant_lists(group)
@@ -1630,6 +1645,7 @@ def on_delete_user(data):
         emit('admin_error', {'message': 'Could not delete user.'})
         return
     online_users.pop(uid, None)
+    log_admin('delete_user', f'Deleted user {uname}')
     socketio.emit('user_deleted', {'user_id': uid, 'username': uname})
     socketio.emit('force_logout', {}, to=f"user_sys_{uid}")
 
@@ -1657,6 +1673,7 @@ def on_approve_request(data):
         if user and r.new_password:
             user.password = r.new_password
             db.session.commit()
+    log_admin('approve_' + r.kind, f'{r.kind} for {r.username}')
     db.session.delete(r)
     db.session.commit()
     broadcast_admin_requests()
@@ -1672,9 +1689,53 @@ def on_decline_request(data):
         user = User.query.get(r.user_id)
         if user and not user.approved:  # delete the never-approved account
             db.session.delete(user)
+    log_admin('decline_' + r.kind, f'{r.kind} for {r.username}')
     db.session.delete(r)
     db.session.commit()
     broadcast_admin_requests()
+
+@socketio.on('get_admin_dashboard')
+def on_get_admin_dashboard():
+    if not is_site_admin(current_user):
+        return
+    users = User.query.order_by(func.lower(User.username)).all()
+    counts = dict(db.session.query(Message.sender_id, func.count(Message.id)).group_by(Message.sender_id).all())
+    user_rows = [{
+        'id': u.id, 'username': u.username,
+        'online': u.id in online_users,
+        'status': user_status.get(u.id, 'active') if u.id in online_users else 'offline',
+        'last_seen': iso_utc(u.last_seen) if u.last_seen else None,
+        'messages': counts.get(u.id, 0),
+        'approved': bool(u.approved),
+        'is_admin': is_site_admin(u),
+    } for u in users]
+    reports = []
+    for r in Report.query.order_by(Report.id.desc()).limit(50).all():
+        rep = User.query.get(r.reporter_id)
+        tgt = User.query.get(r.reported_user_id) if r.reported_user_id else None
+        reports.append({'id': r.id, 'reporter': rep.username if rep else '?',
+                        'reported': tgt.username if tgt else '?', 'reason': r.reason or '',
+                        'when': to_amman(r.timestamp).strftime('%b %d, %I:%M %p') if r.timestamp else ''})
+    logs = [{'actor': l.actor, 'action': l.action, 'detail': l.detail,
+             'when': to_amman(l.created_at).strftime('%b %d, %I:%M %p') if l.created_at else ''}
+            for l in AdminLog.query.order_by(AdminLog.id.desc()).limit(40).all()]
+    stats = {
+        'users': User.query.count(), 'online': len(online_users),
+        'messages': Message.query.count(), 'groups': ChatGroup.query.count(),
+        'pending': ApprovalRequest.query.count(), 'reports': Report.query.count(),
+    }
+    emit('admin_dashboard', {'stats': stats, 'users': user_rows, 'reports': reports, 'logs': logs})
+
+@socketio.on('dismiss_report')
+def on_dismiss_report(data):
+    if not is_site_admin(current_user):
+        return
+    r = Report.query.get(int(data['id']))
+    if r:
+        db.session.delete(r)
+        db.session.commit()
+        log_admin('dismiss_report', f"Report #{data['id']}")
+    on_get_admin_dashboard()
 
 @socketio.on('schedule_message')
 def on_schedule_message(data):

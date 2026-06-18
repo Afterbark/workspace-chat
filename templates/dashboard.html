@@ -242,6 +242,20 @@
         #gif-results img:hover { outline: 2px solid var(--accent); }
         .gif-note { grid-column: 1 / -1; color: var(--text-soft); font-size: 13px; text-align: center; padding: 24px; }
 
+        .admin-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+        .admin-stat { background: var(--bg); border-radius: 10px; padding: 10px; text-align: center; }
+        .admin-stat .n { font-size: 20px; font-weight: 800; }
+        .admin-stat .l { font-size: 11px; color: var(--text-soft); text-transform: uppercase; letter-spacing: .04em; }
+        .admin-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+        .admin-tab { flex: 1; padding: 8px; border: none; border-radius: 8px; background: var(--bg); color: var(--text); font-weight: 600; cursor: pointer; }
+        .admin-tab.active { background: var(--accent); color: #fff; }
+        .admin-tabpane { max-height: 46vh; overflow-y: auto; }
+        .admin-row { display: flex; align-items: center; gap: 8px; padding: 9px 6px; border-bottom: 1px solid var(--border); font-size: 14px; }
+        .admin-row .grow { flex: 1; min-width: 0; }
+        .admin-row .sub { font-size: 12px; color: var(--text-soft); }
+        .adot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; background: var(--text-soft); }
+        .adot.active { background: var(--green); } .adot.away { background: #f59e0b; }
+
         #requests-list { max-height: 55vh; overflow-y: auto; }
         .req-row { display: flex; align-items: center; gap: 8px; padding: 11px 4px; border-bottom: 1px solid var(--border); }
         .req-row .req-info { flex: 1; min-width: 0; }
@@ -357,17 +371,18 @@
             {% if is_admin %}
             <button class="icon-btn" id="requests-btn" title="Approval requests" onclick="openRequests()" style="position:relative;">&#128276;<span class="badge" id="requests-badge" style="position:absolute; top:-3px; right:-3px; display:none; background:var(--danger);">0</span></button>
             {% endif %}
+            <button class="icon-btn" id="lang-btn" title="Language" onclick="toggleLang()" style="font-weight:800;font-size:13px;">ع</button>
             <button class="icon-btn" title="Settings" onclick="openSettings()">&#9881;</button>
             <button class="icon-btn" id="theme-btn" title="Toggle theme" onclick="toggleTheme()">&#127769;</button>
         </div>
 
         <div class="search-wrap">
-            <input type="text" id="filter-input" placeholder="Filter conversations..." oninput="filterChats(this.value)">
+            <input type="text" id="filter-input" placeholder="Filter conversations..." data-i18n-ph="filter_ph" oninput="filterChats(this.value)">
             <button class="icon-btn" title="Search messages" onclick="openSearch()">&#128269;</button>
         </div>
 
         <div class="list-scroll">
-            <div class="section-title">Direct Messages</div>
+            <div class="section-title" data-i18n="dm_section">Direct Messages</div>
             <div id="dm-list">
                 {% for user in users %}
                     {% set avatar = user.profile_pic if user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=2563eb&color=fff') %}
@@ -382,7 +397,7 @@
                 {% endfor %}
             </div>
 
-            <div class="section-title">Group Chats</div>
+            <div class="section-title" data-i18n="group_section">Group Chats</div>
             <div id="group-list">
                 {% for group in groups %}
                     <div class="item chat-nav" id="nav-group-{{ group.id }}" data-name="{{ group.name|lower }}" onclick="openChat('group', {{ group.id }}, '{{ group.name }}')">
@@ -403,8 +418,8 @@
             <div id="archived-section"></div>
         </div>
 
-        <button class="create-btn" onclick="document.getElementById('groupModal').style.display='block'">+ New Group</button>
-        <a href="/logout" class="logout-btn">Logout</a>
+        <button class="create-btn" data-i18n="new_group" onclick="document.getElementById('groupModal').style.display='block'">+ New Group</button>
+        <a href="/logout" class="logout-btn" data-i18n="logout">Logout</a>
     </div>
     <div class="sidebar-overlay" onclick="toggleSidebar(false)"></div>
 
@@ -413,7 +428,7 @@
             <button class="hamburger" onclick="toggleSidebar(true)">&#9776;</button>
             <img src="" id="header-avatar" class="h-avatar" style="display:none;" onerror="avatarFallback(this)">
             <div>
-                <div class="h-title" id="chat-title">Select a chat to begin</div>
+                <div class="h-title" id="chat-title" data-i18n="select_chat">Select a chat to begin</div>
                 <div class="h-sub" id="chat-subtitle"></div>
             </div>
             <div id="header-actions"></div>
@@ -432,7 +447,7 @@
         <div id="chat-box">
             <div class="empty-state" id="empty-state">
                 <div class="big">&#128172;</div>
-                <div>Pick a conversation to start chatting.</div>
+                <div data-i18n="empty_pick">Pick a conversation to start chatting.</div>
             </div>
         </div>
         <div id="drop-overlay">Drop to send file</div>
@@ -461,9 +476,9 @@
                 <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled>&#128512;</button>
                 <button id="gif-btn" class="compose-btn" onclick="openGifPicker()" disabled title="Send a GIF" style="font-size:12px;font-weight:800;">GIF</button>
                 <button id="mic-btn" class="compose-btn" onclick="toggleRecording()" disabled title="Record voice message">&#127908;</button>
-                <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
+                <input type="text" id="message-input" placeholder="Type a message..." data-i18n-ph="type_ph" autocomplete="off" disabled>
                 <button id="schedule-btn" class="compose-btn" onclick="openSchedule()" disabled title="Schedule message">&#128340;</button>
-                <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
+                <button id="send-btn" data-i18n="send" onclick="sendMessage()" disabled>Send</button>
             </div>
         </div>
     </div>
@@ -545,6 +560,10 @@
             </div>
             {% if is_admin %}
             <div class="settings-row">
+                <label>Admin</label>
+                <button class="modal-btn primary" style="width:100%;" onclick="openAdminDashboard()">Open Admin Dashboard</button>
+            </div>
+            <div class="settings-row">
                 <label>Admin &mdash; delete users</label>
                 <div id="admin-user-list" style="max-height:220px; overflow-y:auto; border:1px solid var(--border); border-radius:10px;">
                     {% for u in user_dict.values() %}
@@ -559,6 +578,22 @@
             </div>
             {% endif %}
             <button type="button" class="modal-btn ghost" style="width:100%;" onclick="document.getElementById('settingsModal').style.display='none'">Close</button>
+        </div>
+    </div>
+
+    <div id="adminDashModal" class="modal">
+        <div class="modal-content" style="width:680px;">
+            <h3>Admin Dashboard</h3>
+            <div id="admin-stats" class="admin-stats"></div>
+            <div class="admin-tabs">
+                <button class="admin-tab active" data-tab="users" onclick="adminTab('users')">Users</button>
+                <button class="admin-tab" data-tab="reports" onclick="adminTab('reports')">Reports</button>
+                <button class="admin-tab" data-tab="logs" onclick="adminTab('logs')">Activity</button>
+            </div>
+            <div id="admin-tab-users" class="admin-tabpane"></div>
+            <div id="admin-tab-reports" class="admin-tabpane" style="display:none;"></div>
+            <div id="admin-tab-logs" class="admin-tabpane" style="display:none;"></div>
+            <button type="button" class="modal-btn ghost" style="width:100%; margin-top:14px;" onclick="document.getElementById('adminDashModal').style.display='none'">Close</button>
         </div>
     </div>
 
@@ -652,7 +687,32 @@
             try { localStorage.setItem('theme', next); } catch (e) {}
             applyTheme(next);
         }
-        (function () { let t = 'light'; try { t = localStorage.getItem('theme') || 'light'; } catch (e) {} applyTheme(t); })();
+        (function () { let th = 'light'; try { th = localStorage.getItem('theme') || 'light'; } catch (e) {} applyTheme(th); })();
+
+        /* ---------- i18n (English / Arabic) ---------- */
+        const I18N = {
+            en: { dm_section: 'Direct Messages', group_section: 'Group Chats', new_group: '+ New Group', logout: 'Logout',
+                  filter_ph: 'Filter conversations...', type_ph: 'Type a message...', send: 'Send',
+                  select_chat: 'Select a chat to begin', empty_pick: 'Pick a conversation to start chatting.',
+                  participants: 'Participants', leave: 'Leave' },
+            ar: { dm_section: 'الرسائل المباشرة', group_section: 'المحادثات الجماعية', new_group: '+ مجموعة جديدة', logout: 'تسجيل الخروج',
+                  filter_ph: 'تصفية المحادثات...', type_ph: 'اكتب رسالة...', send: 'إرسال',
+                  select_chat: 'اختر محادثة للبدء', empty_pick: 'اختر محادثة لبدء الدردشة.',
+                  participants: 'الأعضاء', leave: 'مغادرة' }
+        };
+        let appLang = 'en';
+        try { appLang = localStorage.getItem('lang') || 'en'; } catch (e) {}
+        function tr(key) { return (I18N[appLang] && I18N[appLang][key]) || I18N.en[key] || key; }
+        function applyLang(l) {
+            appLang = l;
+            document.documentElement.lang = l;
+            document.documentElement.dir = (l === 'ar') ? 'rtl' : 'ltr';
+            const btn = document.getElementById('lang-btn'); if (btn) btn.textContent = (l === 'ar') ? 'EN' : 'ع';
+            document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = tr(el.dataset.i18n); });
+            document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = tr(el.dataset.i18nPh); });
+        }
+        function toggleLang() { const next = appLang === 'ar' ? 'en' : 'ar'; try { localStorage.setItem('lang', next); } catch (e) {} applyLang(next); }
+        applyLang(appLang);
 
         /* ---------- helpers ---------- */
         function escapeHtml(str) {
@@ -1121,6 +1181,46 @@
         }
 
         /* ---------- site admin: delete users ---------- */
+        /* ---------- admin dashboard ---------- */
+        function openAdminDashboard() {
+            socket.emit('get_admin_dashboard');
+            document.getElementById('settingsModal').style.display = 'none';
+            document.getElementById('adminDashModal').style.display = 'block';
+            adminTab('users');
+        }
+        function adminTab(t) {
+            ['users', 'reports', 'logs'].forEach(x => document.getElementById('admin-tab-' + x).style.display = (x === t ? 'block' : 'none'));
+            document.querySelectorAll('.admin-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+        }
+        function dismissReport(id) { socket.emit('dismiss_report', { id: id }); }
+        socket.on('admin_dashboard', function(d) {
+            const s = d.stats;
+            document.getElementById('admin-stats').innerHTML = [
+                ['Users', s.users], ['Online', s.online], ['Messages', s.messages],
+                ['Groups', s.groups], ['Pending', s.pending], ['Reports', s.reports]
+            ].map(([l, n]) => `<div class="admin-stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+            const u = document.getElementById('admin-tab-users');
+            u.innerHTML = d.users.map(x => `<div class="admin-row">
+                <span class="adot ${x.online ? x.status : ''}"></span>
+                <div class="grow"><b>${escapeHtml(x.username)}</b>${x.is_admin ? ' <span class="role-tag admin">Admin</span>' : ''}${x.approved ? '' : ' <span class="role-tag" style="background:#fee2e2;color:#991b1b;">Pending</span>'}
+                    <div class="sub">${x.messages} messages · ${x.online ? (x.status === 'away' ? 'Away' : 'Active') : 'Offline'}</div></div>
+                ${(x.id !== myUserId && !x.is_admin) ? `<button class="remove-btn" data-id="${x.id}" data-name="${escapeHtml(x.username)}">Delete</button>` : ''}
+            </div>`).join('') || '<div class="search-empty">No users.</div>';
+            u.querySelectorAll('.remove-btn').forEach(b => b.onclick = () => adminDeleteUser(parseInt(b.dataset.id), b.dataset.name));
+
+            const rp = document.getElementById('admin-tab-reports');
+            rp.innerHTML = d.reports.length ? d.reports.map(r => `<div class="admin-row">
+                <div class="grow"><b>${escapeHtml(r.reported)}</b> <span class="sub">reported by ${escapeHtml(r.reporter)} · ${escapeHtml(r.when)}</span>
+                    <div class="sub">${escapeHtml(r.reason)}</div></div>
+                <button class="role-btn" data-id="${r.id}">Dismiss</button>
+            </div>`).join('') : '<div class="search-empty">No reports.</div>';
+            rp.querySelectorAll('.role-btn').forEach(b => b.onclick = () => dismissReport(parseInt(b.dataset.id)));
+
+            const lg = document.getElementById('admin-tab-logs');
+            lg.innerHTML = d.logs.length ? d.logs.map(l => `<div class="admin-row"><div class="grow"><b>${escapeHtml(l.actor || '?')}</b> <span class="sub">${escapeHtml(l.action)}</span><div class="sub">${escapeHtml(l.detail || '')} · ${escapeHtml(l.when)}</div></div></div>`).join('') : '<div class="search-empty">No activity yet.</div>';
+        });
+
         function adminDeleteUser(uid, name) {
             if (confirm(`Permanently delete "${name}"? This removes their account and all their messages, and cannot be undone.`))
                 socket.emit('delete_user', { user_id: uid });
@@ -1134,12 +1234,13 @@
             if (currentChatType === 'dm' && currentChatId === data.user_id) {
                 currentChatType = null; currentChatId = null;
                 document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128465;</div><div>This user was deleted.</div></div>';
-                document.getElementById('chat-title').textContent = 'Select a chat to begin';
+                document.getElementById('chat-title').textContent = tr('select_chat');
                 document.getElementById('chat-subtitle').textContent = '';
                 document.getElementById('menu-wrap').style.display = 'none';
                 ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
             }
             showToast('User deleted', `${data.username} was removed.`);
+            if (document.getElementById('adminDashModal').style.display === 'block') socket.emit('get_admin_dashboard');
         });
         socket.on('force_logout', function() { window.location.href = '/logout'; });
         socket.on('admin_error', function(d) { alert(d.message || 'Action failed.'); });
@@ -1309,7 +1410,7 @@
                 if (currentChatType === 'dm' && currentChatId === data.user_id) {
                     currentChatType = null; currentChatId = null;
                     document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128683;</div><div>You blocked this user.</div></div>';
-                    document.getElementById('chat-title').textContent = 'Select a chat to begin';
+                    document.getElementById('chat-title').textContent = tr('select_chat');
                     document.getElementById('chat-subtitle').textContent = '';
                     document.getElementById('menu-wrap').style.display = 'none';
                 }
@@ -1688,7 +1789,7 @@
             if (currentChatType === 'group' && currentChatId === data.id) {
                 currentChatType = null; currentChatId = null;
                 document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128075;</div><div>You were removed from this group.</div></div>';
-                document.getElementById('chat-title').textContent = 'Select a chat to begin';
+                document.getElementById('chat-title').textContent = tr('select_chat');
                 document.getElementById('chat-subtitle').textContent = '';
                 document.getElementById('header-actions').innerHTML = '';
                 document.getElementById('header-avatar').style.display = 'none';
@@ -1728,8 +1829,8 @@
             } else {
                 applyGroupHeaderPhoto(id, name); subtitle.textContent = ''; subtitle.classList.remove('online');
                 headerActions.innerHTML = `
-                    <button class="action-btn btn-light" onclick="viewParticipants()">Participants</button>
-                    <button class="action-btn btn-danger" onclick="leaveGroup()">Leave</button>`;
+                    <button class="action-btn btn-light" onclick="viewParticipants()">${tr('participants')}</button>
+                    <button class="action-btn btn-danger" onclick="leaveGroup()">${tr('leave')}</button>`;
             }
 
             document.getElementById('chat-box').innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
