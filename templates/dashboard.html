@@ -117,9 +117,12 @@
         .msg-col { display: flex; flex-direction: column; min-width: 0; }
 
         .reply-quote { background: rgba(37,99,235,.08); border-left: 3px solid var(--accent); padding: 4px 10px;
-            border-radius: 8px; margin-bottom: 3px; font-size: 12.5px; max-width: 320px; }
+            border-radius: 8px; margin-bottom: 3px; font-size: 12.5px; max-width: 320px; cursor: pointer; }
+        .reply-quote:hover { background: rgba(37,99,235,.16); }
         .reply-quote .rq-sender { font-weight: 700; color: var(--accent); }
         .reply-quote .rq-text { color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        @keyframes flashJump { 0%,70% { background: var(--accent-soft); } 100% { background: transparent; } }
+        .message-row.flash-jump .bubble { animation: flashJump 1.2s ease-out; }
 
         .bubble { background: var(--other-bubble); padding: 8px 12px 6px; border-radius: 14px; position: relative;
             word-wrap: break-word; overflow-wrap: anywhere; box-shadow: var(--shadow); border-top-left-radius: 4px; }
@@ -127,6 +130,17 @@
         .bubble.deleted { font-style: italic; color: var(--text-soft); background: transparent; box-shadow: none; border: 1px dashed var(--border); }
         .bubble .sender { font-size: 12.5px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }
         .bubble .text { font-size: 14.5px; line-height: 1.4; white-space: pre-wrap; }
+        .bubble .text strong { font-weight: 700; }
+        .bubble .text em { font-style: italic; }
+        .bubble .text del { opacity: .7; }
+        .bubble .text code.inline-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12.5px; background: rgba(127,127,127,.18); padding: 1px 5px; border-radius: 5px; }
+        .bubble .text pre.code-block { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12.5px; line-height: 1.45; background: rgba(127,127,127,.14); border: 1px solid var(--border);
+            border-radius: 8px; padding: 8px 10px; margin: 4px 0; overflow-x: auto; white-space: pre; }
+        .bubble .text pre.code-block code { background: none; padding: 0; }
+        .message-row.mine .bubble .text code.inline-code { background: rgba(255,255,255,.22); }
+        .message-row.mine .bubble .text pre.code-block { background: rgba(255,255,255,.15); border-color: rgba(255,255,255,.25); }
         .bubble.emoji-bubble { background: transparent !important; box-shadow: none; padding: 2px 0; }
         .bubble.emoji-bubble .time { float: none; display: block; margin: 2px 0 0; color: var(--text-soft); }
         .message-row.mine .bubble.emoji-bubble .time { color: var(--text-soft); text-align: right; }
@@ -730,6 +744,36 @@
                 return full;
             });
         }
+        // Renders message text as safe HTML with markdown-style formatting:
+        // ```code blocks```, `inline code`, **bold**, *italic* / _italic_, ~~strike~~, plus @mentions.
+        // Code spans are extracted first so their contents are never treated as formatting or mentions.
+        function formatRich(raw) {
+            // SEP is a private-use sentinel wrapped around code-span placeholders so user
+            // text that happens to read like a placeholder (e.g. "CB0") is never mistaken for one.
+            const SEP = '\uE000', blocks = [], inlines = [];
+            // 1. Fenced code blocks (optional language hint after the opening fence).
+            let s = (raw || '').replace(/```(\w*)\r?\n?([\s\S]*?)```/g, (m, lang, code) => {
+                blocks.push(code.replace(/\n$/, ''));
+                return SEP + 'CB' + (blocks.length - 1) + SEP;
+            });
+            // 2. Inline code.
+            s = s.replace(/`([^`\n]+)`/g, (m, code) => {
+                inlines.push(code);
+                return SEP + 'IC' + (inlines.length - 1) + SEP;
+            });
+            // 3. Escape the remaining text, then apply inline emphasis.
+            s = escapeHtml(s);
+            s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+            s = s.replace(/(^|[^\w*])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>');
+            s = s.replace(/(^|[^\w_])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>');
+            s = s.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+            // 4. Mentions on the formatted (code-free) text.
+            s = highlightMentions(s);
+            // 5. Restore code spans with their contents escaped.
+            s = s.replace(/\uE000IC(\d+)\uE000/g, (m, i) => `<code class="inline-code">${escapeHtml(inlines[+i])}</code>`);
+            s = s.replace(/\uE000CB(\d+)\uE000/g, (m, i) => `<pre class="code-block"><code>${escapeHtml(blocks[+i])}</code></pre>`);
+            return s;
+        }
         function avatarFor(senderId, name) {
             return userAvatars[senderId] || `https://ui-avatars.com/api/?name=${encodeURIComponent(name || '')}&background=2563eb&color=fff`;
         }
@@ -873,7 +917,7 @@
             const senderHtml = showSender ? `<div class="sender">${escapeHtml(msg.sender || msg.username)}</div>` : '';
             const ec = (text && !msg.file_url && !msg.reply_to && !msg.forwarded) ? emojiOnlyCount(text) : 0;
             const emjCls = ec ? ` emoji-only ${ec <= 1 ? 'emj1' : (ec <= 3 ? 'emj2' : 'emj3')}` : '';
-            const textHtml = text ? `<div class="text${emjCls}">${ec ? escapeHtml(text) : highlightMentions(escapeHtml(text))}</div>` : '';
+            const textHtml = text ? `<div class="text${emjCls}">${ec ? escapeHtml(text) : formatRich(text)}</div>` : '';
             const fileHtml = buildFileHtml(msg.file_url, msg.file_type, msg.file_name);
             const editedTag = msg.edited ? ' <span class="edited-tag">(edited)</span>' : '';
             const fwdTag = msg.forwarded ? '<span class="fwd-tag">↪ Forwarded</span>' : '';
@@ -881,7 +925,7 @@
 
             let replyHtml = '';
             if (msg.reply_to) {
-                replyHtml = `<div class="reply-quote"><div class="rq-sender">${escapeHtml(msg.reply_to.sender)}</div><div class="rq-text">${escapeHtml(msg.reply_to.snippet)}</div></div>`;
+                replyHtml = `<div class="reply-quote" title="Go to message" onclick="jumpToMessage(${msg.reply_to.msg_id})"><div class="rq-sender">${escapeHtml(msg.reply_to.sender)}</div><div class="rq-text">${escapeHtml(msg.reply_to.snippet)}</div></div>`;
             }
 
             const actions = `
@@ -1030,6 +1074,33 @@
 
         function findRow(msgId) { return document.querySelector(`.message-row[data-msg-id="${msgId}"]`); }
 
+        /* ---------- reply-to-jump ---------- */
+        let pendingJumpId = null, pendingJumpTries = 0;
+        function flashRow(row) {
+            row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            row.classList.remove('flash-jump');
+            void row.offsetWidth; // reflow so the animation restarts on repeat clicks
+            row.classList.add('flash-jump');
+            setTimeout(() => row.classList.remove('flash-jump'), 1300);
+        }
+        // Scroll to the message being quoted. If it has been paginated out, pull in
+        // older history (bounded) until it appears, then flash it.
+        function jumpToMessage(msgId) {
+            const row = findRow(msgId);
+            if (row) { pendingJumpId = null; pendingJumpTries = 0; flashRow(row); return; }
+            if (hasMoreOlder && pendingJumpTries < 20) {
+                pendingJumpId = msgId;
+                if (!loadingOlder && oldestRenderedId !== null) {
+                    loadingOlder = true;
+                    const sp = document.getElementById('load-older-spinner'); if (sp) sp.style.display = 'block';
+                    socket.emit('load_older', { type: currentChatType, id: currentChatId, before_id: oldestRenderedId });
+                }
+                return;
+            }
+            pendingJumpId = null; pendingJumpTries = 0;
+            showToast('Message unavailable', "Couldn't find the original message.");
+        }
+
         /* ---------- reply / edit / delete ---------- */
         function startReply(msgId) {
             const row = findRow(msgId); if (!row) return;
@@ -1066,7 +1137,7 @@
             const row = findRow(data.msg_id); if (!row) return;
             row.dataset.content = data.content;
             const textEl = row.querySelector('.text');
-            const html = highlightMentions(escapeHtml(data.content));
+            const html = formatRich(data.content);
             if (textEl) textEl.innerHTML = html;
             else row.querySelector('.bubble').insertAdjacentHTML('afterbegin', `<div class="text">${html}</div>`);
             const time = row.querySelector('.time');
@@ -1869,6 +1940,7 @@
         function openChat(type, id, name) {
             currentChatType = type; currentChatId = id;
             renderedMessages = new Set(); oldestRenderedId = null; hasMoreOlder = false;
+            pendingJumpId = null; pendingJumpTries = 0;
             seenState = {}; groupMembers = []; pinnedList = [];
             document.getElementById('pinned-banner').style.display = 'none';
             document.getElementById('new-msg-pill').style.display = 'none';
@@ -1942,6 +2014,7 @@
             chatBox.scrollTop = prevTop + (chatBox.scrollHeight - prevHeight);
             loadingOlder = false;
             const sp = document.getElementById('load-older-spinner'); if (sp) sp.style.display = 'none';
+            if (pendingJumpId !== null) { pendingJumpTries++; jumpToMessage(pendingJumpId); }
         });
 
         function showNewMsgPill() { document.getElementById('new-msg-pill').style.display = 'block'; }
