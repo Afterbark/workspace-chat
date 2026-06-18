@@ -31,7 +31,7 @@
         * { box-sizing: border-box; }
         html, body { height: 100%; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
             background: var(--bg); margin: 0; display: flex; height: 100vh; color: var(--text);
             overflow: hidden; transition: background .2s, color .2s;
         }
@@ -127,6 +127,13 @@
         .bubble.deleted { font-style: italic; color: var(--text-soft); background: transparent; box-shadow: none; border: 1px dashed var(--border); }
         .bubble .sender { font-size: 12.5px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }
         .bubble .text { font-size: 14.5px; line-height: 1.4; white-space: pre-wrap; }
+        .bubble.emoji-bubble { background: transparent !important; box-shadow: none; padding: 2px 0; }
+        .bubble.emoji-bubble .time { float: none; display: block; margin: 2px 0 0; color: var(--text-soft); }
+        .message-row.mine .bubble.emoji-bubble .time { color: var(--text-soft); text-align: right; }
+        .text.emoji-only { line-height: 1.15; }
+        .text.emoji-only.emj1 { font-size: 52px; }
+        .text.emoji-only.emj2 { font-size: 40px; }
+        .text.emoji-only.emj3 { font-size: 30px; }
         .bubble .time { font-size: 10.5px; color: var(--text-soft); float: right; margin: 6px 0 0 10px; line-height: 1; }
         .message-row.mine .bubble .time { color: rgba(255,255,255,.75); }
         .bubble .edited-tag { font-style: italic; }
@@ -726,6 +733,20 @@
         function avatarFor(senderId, name) {
             return userAvatars[senderId] || `https://ui-avatars.com/api/?name=${encodeURIComponent(name || '')}&background=2563eb&color=fff`;
         }
+        // Returns the emoji count if the text is ONLY emoji (1..8), else 0.
+        function emojiOnlyCount(text) {
+            if (!text) return 0;
+            const t = text.trim();
+            if (!t) return 0;
+            let stripped;
+            try { stripped = t.replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}‍️⃣]/gu, '').replace(/\s+/g, ''); }
+            catch (e) { return 0; }
+            if (stripped.length) return 0;  // contains non-emoji characters
+            let count;
+            try { count = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(t.replace(/\s+/g, ''))].length; }
+            catch (e) { count = Array.from(t.replace(/\s+/g, '')).length; }
+            return (count >= 1 && count <= 8) ? count : 0;
+        }
         // When a stored photo 404s (e.g. an old local upload lost on restart),
         // fall back to a generated initials avatar instead of a broken image.
         function avatarFallback(img) {
@@ -850,7 +871,9 @@
 
             const showSender = !mine && currentChatType === 'group';
             const senderHtml = showSender ? `<div class="sender">${escapeHtml(msg.sender || msg.username)}</div>` : '';
-            const textHtml = text ? `<div class="text">${highlightMentions(escapeHtml(text))}</div>` : '';
+            const ec = (text && !msg.file_url && !msg.reply_to && !msg.forwarded) ? emojiOnlyCount(text) : 0;
+            const emjCls = ec ? ` emoji-only ${ec <= 1 ? 'emj1' : (ec <= 3 ? 'emj2' : 'emj3')}` : '';
+            const textHtml = text ? `<div class="text${emjCls}">${ec ? escapeHtml(text) : highlightMentions(escapeHtml(text))}</div>` : '';
             const fileHtml = buildFileHtml(msg.file_url, msg.file_type, msg.file_name);
             const editedTag = msg.edited ? ' <span class="edited-tag">(edited)</span>' : '';
             const fwdTag = msg.forwarded ? '<span class="fwd-tag">↪ Forwarded</span>' : '';
@@ -875,7 +898,7 @@
                 ${avatar}
                 <div class="msg-col">
                     ${replyHtml}
-                    <div class="bubble">${fwdTag}${senderHtml}${textHtml}${fileHtml}${previewHtml}<span class="time">${formatAmmanTime(msg.ts_iso) || msg.timestamp || ''}${editedTag}</span></div>
+                    <div class="bubble${ec ? ' emoji-bubble' : ''}">${fwdTag}${senderHtml}${textHtml}${fileHtml}${previewHtml}<span class="time">${formatAmmanTime(msg.ts_iso) || msg.timestamp || ''}${editedTag}</span></div>
                     <div class="reactions"></div>
                 </div>
                 ${actions}`;
