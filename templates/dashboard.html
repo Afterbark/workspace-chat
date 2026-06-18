@@ -95,6 +95,14 @@
 
         .date-sep { align-self: center; background: var(--panel); color: var(--text-soft); font-size: 12px;
             font-weight: 600; padding: 4px 14px; border-radius: 999px; margin: 14px 0 10px; box-shadow: var(--shadow); }
+        .unread-divider { align-self: stretch; display: flex; align-items: center; gap: 10px; margin: 14px 0;
+            color: var(--accent); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+        .unread-divider::before, .unread-divider::after { content: ''; flex: 1; height: 1px; background: var(--accent); opacity: .45; }
+
+        .flair-piece { position: absolute; top: -24px; z-index: 80; pointer-events: none; border-radius: 2px;
+            animation: flair-fall linear forwards; will-change: transform, opacity; }
+        @keyframes flair-fall { 0% { transform: translateY(-24px) rotate(0); opacity: 1; } 100% { transform: translateY(94vh) rotate(700deg); opacity: 0; } }
+
         .system-row { display: flex; justify-content: center; margin: 8px 0; }
         .system-msg { background: var(--panel); color: var(--text-soft); font-size: 12.5px; padding: 5px 14px;
             border-radius: 999px; box-shadow: var(--shadow); max-width: 80%; text-align: center; }
@@ -945,6 +953,31 @@
         function openLightbox(url) {
             const lb = document.getElementById('lightbox');
             lb.querySelector('img').src = url; lb.style.display = 'flex';
+        }
+
+        /* ---------- animated flair (confetti / hearts) ---------- */
+        let lastFlair = 0;
+        function burstFlair(kind) {
+            const container = document.querySelector('.chat-area');
+            if (!container) return;
+            for (let i = 0; i < 26; i++) {
+                const el = document.createElement('div');
+                el.className = 'flair-piece';
+                if (kind === 'hearts') { el.textContent = ['❤️', '💖', '💕', '💗'][i % 4]; el.style.fontSize = (16 + Math.random() * 18) + 'px'; }
+                else { el.style.background = `hsl(${Math.random() * 360},90%,60%)`; const s = (6 + Math.random() * 8); el.style.width = s + 'px'; el.style.height = s + 'px'; }
+                el.style.left = (Math.random() * 100) + '%';
+                el.style.animationDuration = (1.8 + Math.random() * 1.6) + 's';
+                el.style.animationDelay = (Math.random() * 0.3) + 's';
+                container.appendChild(el);
+                setTimeout(() => el.remove(), 3800);
+            }
+        }
+        function triggerFlair(text) {
+            if (!text) return;
+            const now = Date.now();
+            if (now - lastFlair < 1500) return;  // throttle
+            if (text.includes('🎉') || text.includes('🎊')) { lastFlair = now; burstFlair('confetti'); }
+            else if (text.includes('❤️') || text.includes('😍') || text.includes('🥰') || text.includes('😘') || text.includes('💖')) { lastFlair = now; burstFlair('hearts'); }
         }
 
         /* ---------- reactions palette ---------- */
@@ -1861,7 +1894,19 @@
             else if (currentChatType === 'dm') { if (payload.last_seen) lastSeenMap[currentChatId] = payload.last_seen; setDmSubtitle(currentChatId); }
             payload.messages.forEach(appendMessage);
             renderPinnedBanner();
-            chatBox.scrollTop = chatBox.scrollHeight;
+            // "New messages" divider at the first unread message
+            let dividerEl = null;
+            if (payload.first_unread) {
+                const firstRow = chatBox.querySelector(`.message-row[data-msg-id="${payload.first_unread}"]`);
+                if (firstRow) {
+                    dividerEl = document.createElement('div');
+                    dividerEl.className = 'unread-divider';
+                    dividerEl.textContent = 'New messages';
+                    firstRow.parentNode.insertBefore(dividerEl, firstRow);
+                }
+            }
+            if (dividerEl) dividerEl.scrollIntoView({ block: 'center' });
+            else chatBox.scrollTop = chatBox.scrollHeight;
             updateSeenIndicator();
             socket.emit('mark_read', { type: currentChatType, id: currentChatId });
         });
@@ -1931,6 +1976,7 @@
                 });
                 document.getElementById('typing-indicator').style.display = 'none';
                 updateSeenIndicator();
+                triggerFlair(data.message);
                 // only snap to bottom if the reader is already there (or it's their own message)
                 if (nearBottom || data.sender_id === myUserId) { chatBox.scrollTop = chatBox.scrollHeight; hideNewMsgPill(); }
                 else showNewMsgPill();

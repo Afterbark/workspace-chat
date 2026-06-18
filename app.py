@@ -508,6 +508,18 @@ def get_unread(chat_type, chat_id, me_id):
     ).count()
     return len(ids) - read
 
+def first_unread_id(chat_type, chat_id, me_id):
+    """Oldest message from others that the user hasn't read yet (for the 'New messages' divider)."""
+    ids = [r.id for r in base_chat_query(chat_type, chat_id, me_id)
+           .filter(Message.sender_id != me_id, Message.is_deleted == False, Message.is_system == False)
+           .with_entities(Message.id).all()]
+    if not ids:
+        return None
+    read = {r.message_id for r in MessageRead.query.filter(
+        MessageRead.user_id == me_id, MessageRead.message_id.in_(ids)).all()}
+    unread = [i for i in ids if i not in read]
+    return min(unread) if unread else None
+
 def extract_mentions(content, group_id):
     """Return list of user ids mentioned via @username among the group's members.
     @everyone / @all mentions every member of the group."""
@@ -1263,6 +1275,7 @@ def on_join(data):
         'has_more': total > len(history),
         'seen': get_seen_state(chat_type, chat_id, current_user.id),
         'pinned': [_pin_preview(m) for m in pinned],
+        'first_unread': first_unread_id(chat_type, chat_id, current_user.id),
     }
     if chat_type == 'group':
         group = ChatGroup.query.get(chat_id)
