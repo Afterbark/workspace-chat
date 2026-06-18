@@ -523,7 +523,8 @@
                 <div class="lbl">Add people</div>
                 <div class="add-row" id="add-participant-row"></div>
             </div>
-            <button type="button" class="modal-btn ghost" style="width:100%; margin-top:16px;" onclick="document.getElementById('participantsModal').style.display='none'">Close</button>
+            <button type="button" id="delete-group-btn" class="modal-btn" style="width:100%; margin-top:14px; background:#fef2f2; color:var(--danger); display:none;" onclick="deleteGroup()">Delete group</button>
+            <button type="button" class="modal-btn ghost" style="width:100%; margin-top:10px;" onclick="document.getElementById('participantsModal').style.display='none'">Close</button>
         </div>
     </div>
 
@@ -1743,6 +1744,7 @@
             // only admins can rename / change photo
             document.querySelector('.group-settings .modal-btn').style.display = canManageGroup ? '' : 'none';
             document.getElementById('group-photo-form').style.display = canManageGroup ? '' : 'none';
+            document.getElementById('delete-group-btn').style.display = canManageGroup ? 'block' : 'none';
             const gp = document.getElementById('gs-photo');
             if (groupPhotos[data.group_id]) gp.outerHTML = `<img id="gs-photo" src="${groupPhotos[data.group_id]}" data-uname="${escapeHtml(gname)}" onerror="avatarFallback(this)">`;
             else { gp.outerHTML = '<span id="gs-photo" class="gs-ph">#</span>'; }
@@ -1784,6 +1786,25 @@
             showToast('Removed from group', `${data.by} removed you from # ${data.name}`);
         });
         function leaveGroup() { if (currentChatType === 'group' && currentChatId && confirm("Leave this group?")) window.location.href = '/leave_group/' + currentChatId; }
+        function deleteGroup() {
+            if (participantsGroupId && confirm('Delete this group for everyone? All of its messages will be permanently removed.'))
+                socket.emit('delete_group', { group_id: participantsGroupId });
+        }
+        socket.on('group_deleted', function(data) {
+            const nav = document.getElementById('nav-group-' + data.id);
+            if (nav) nav.remove();
+            if (participantsGroupId === data.id) { document.getElementById('participantsModal').style.display = 'none'; participantsGroupId = null; }
+            if (currentChatType === 'group' && currentChatId === data.id) {
+                currentChatType = null; currentChatId = null;
+                document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128465;</div><div>This group was deleted.</div></div>';
+                document.getElementById('chat-title').textContent = 'Select a chat to begin';
+                document.getElementById('chat-subtitle').textContent = '';
+                document.getElementById('header-actions').innerHTML = '';
+                document.getElementById('menu-wrap').style.display = 'none';
+                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
+            }
+            showToast('Group deleted', 'The group was removed.');
+        });
 
         /* ---------- open chat ---------- */
         function openChat(type, id, name) {

@@ -1175,6 +1175,42 @@ def on_set_group_admin(data):
     db.session.commit()
     broadcast_participants(group)
 
+@socketio.on('delete_group')
+def on_delete_group(data):
+    group = ChatGroup.query.get(int(data['group_id']))
+    if not group:
+        return
+    # group admins/owner or site admins may delete
+    if not (is_site_admin(current_user) or is_group_admin(group, current_user)):
+        return
+    gid, gname = group.id, group.name
+    member_ids = [u.id for u in group.members]
+    try:
+        msg_ids = [m.id for m in Message.query.filter_by(group_id=gid).with_entities(Message.id).all()]
+        if msg_ids:
+            Message.query.filter(Message.reply_to_id.in_(msg_ids)).update({'reply_to_id': None}, synchronize_session=False)
+            MessageRead.query.filter(MessageRead.message_id.in_(msg_ids)).delete(synchronize_session=False)
+            MessageReaction.query.filter(MessageReaction.message_id.in_(msg_ids)).delete(synchronize_session=False)
+        Message.query.filter_by(group_id=gid).delete(synchronize_session=False)
+        MutedChat.query.filter_by(chat_type='group', chat_id=gid).delete(synchronize_session=False)
+        ArchivedChat.query.filter_by(chat_type='group', chat_id=gid).delete(synchronize_session=False)
+        ScheduledMessage.query.filter_by(chat_type='group', chat_id=gid).delete(synchronize_session=False)
+        for u in list(group.members):
+            group.members.remove(u)
+        for u in list(group.admins):
+            group.admins.remove(u)
+        db.session.delete(group)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        emit('admin_error', {'message': 'Could not delete group.'})
+        return
+    log_admin('delete_group', f'Deleted group {gname}')
+    payload = {'id': gid}
+    socketio.emit('group_deleted', payload, to=f"group_{gid}")
+    for uid in member_ids:
+        socketio.emit('group_deleted', payload, to=f"user_sys_{uid}")
+
 @socketio.on('add_participant')
 def on_add_participant(data):
     group = ChatGroup.query.get(int(data['group_id']))
