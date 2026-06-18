@@ -371,18 +371,17 @@
             {% if is_admin %}
             <button class="icon-btn" id="requests-btn" title="Approval requests" onclick="openRequests()" style="position:relative;">&#128276;<span class="badge" id="requests-badge" style="position:absolute; top:-3px; right:-3px; display:none; background:var(--danger);">0</span></button>
             {% endif %}
-            <button class="icon-btn" id="lang-btn" title="Language" onclick="toggleLang()" style="font-weight:800;font-size:13px;">ع</button>
             <button class="icon-btn" title="Settings" onclick="openSettings()">&#9881;</button>
             <button class="icon-btn" id="theme-btn" title="Toggle theme" onclick="toggleTheme()">&#127769;</button>
         </div>
 
         <div class="search-wrap">
-            <input type="text" id="filter-input" placeholder="Filter conversations..." data-i18n-ph="filter_ph" oninput="filterChats(this.value)">
+            <input type="text" id="filter-input" placeholder="Filter conversations..." oninput="filterChats(this.value)">
             <button class="icon-btn" title="Search messages" onclick="openSearch()">&#128269;</button>
         </div>
 
         <div class="list-scroll">
-            <div class="section-title" data-i18n="dm_section">Direct Messages</div>
+            <div class="section-title">Direct Messages</div>
             <div id="dm-list">
                 {% for user in users %}
                     {% set avatar = user.profile_pic if user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=2563eb&color=fff') %}
@@ -397,7 +396,7 @@
                 {% endfor %}
             </div>
 
-            <div class="section-title" data-i18n="group_section">Group Chats</div>
+            <div class="section-title">Group Chats</div>
             <div id="group-list">
                 {% for group in groups %}
                     <div class="item chat-nav" id="nav-group-{{ group.id }}" data-name="{{ group.name|lower }}" onclick="openChat('group', {{ group.id }}, '{{ group.name }}')">
@@ -418,8 +417,8 @@
             <div id="archived-section"></div>
         </div>
 
-        <button class="create-btn" data-i18n="new_group" onclick="document.getElementById('groupModal').style.display='block'">+ New Group</button>
-        <a href="/logout" class="logout-btn" data-i18n="logout">Logout</a>
+        <button class="create-btn" onclick="document.getElementById('groupModal').style.display='block'">+ New Group</button>
+        <a href="/logout" class="logout-btn">Logout</a>
     </div>
     <div class="sidebar-overlay" onclick="toggleSidebar(false)"></div>
 
@@ -428,7 +427,7 @@
             <button class="hamburger" onclick="toggleSidebar(true)">&#9776;</button>
             <img src="" id="header-avatar" class="h-avatar" style="display:none;" onerror="avatarFallback(this)">
             <div>
-                <div class="h-title" id="chat-title" data-i18n="select_chat">Select a chat to begin</div>
+                <div class="h-title" id="chat-title">Select a chat to begin</div>
                 <div class="h-sub" id="chat-subtitle"></div>
             </div>
             <div id="header-actions"></div>
@@ -447,7 +446,7 @@
         <div id="chat-box">
             <div class="empty-state" id="empty-state">
                 <div class="big">&#128172;</div>
-                <div data-i18n="empty_pick">Pick a conversation to start chatting.</div>
+                <div>Pick a conversation to start chatting.</div>
             </div>
         </div>
         <div id="drop-overlay">Drop to send file</div>
@@ -476,9 +475,9 @@
                 <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled>&#128512;</button>
                 <button id="gif-btn" class="compose-btn" onclick="openGifPicker()" disabled title="Send a GIF" style="font-size:12px;font-weight:800;">GIF</button>
                 <button id="mic-btn" class="compose-btn" onclick="toggleRecording()" disabled title="Record voice message">&#127908;</button>
-                <input type="text" id="message-input" placeholder="Type a message..." data-i18n-ph="type_ph" autocomplete="off" disabled>
+                <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
                 <button id="schedule-btn" class="compose-btn" onclick="openSchedule()" disabled title="Schedule message">&#128340;</button>
-                <button id="send-btn" data-i18n="send" onclick="sendMessage()" disabled>Send</button>
+                <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
             </div>
         </div>
     </div>
@@ -688,31 +687,6 @@
             applyTheme(next);
         }
         (function () { let th = 'light'; try { th = localStorage.getItem('theme') || 'light'; } catch (e) {} applyTheme(th); })();
-
-        /* ---------- i18n (English / Arabic) ---------- */
-        const I18N = {
-            en: { dm_section: 'Direct Messages', group_section: 'Group Chats', new_group: '+ New Group', logout: 'Logout',
-                  filter_ph: 'Filter conversations...', type_ph: 'Type a message...', send: 'Send',
-                  select_chat: 'Select a chat to begin', empty_pick: 'Pick a conversation to start chatting.',
-                  participants: 'Participants', leave: 'Leave' },
-            ar: { dm_section: 'الرسائل المباشرة', group_section: 'المحادثات الجماعية', new_group: '+ مجموعة جديدة', logout: 'تسجيل الخروج',
-                  filter_ph: 'تصفية المحادثات...', type_ph: 'اكتب رسالة...', send: 'إرسال',
-                  select_chat: 'اختر محادثة للبدء', empty_pick: 'اختر محادثة لبدء الدردشة.',
-                  participants: 'الأعضاء', leave: 'مغادرة' }
-        };
-        let appLang = 'en';
-        try { appLang = localStorage.getItem('lang') || 'en'; } catch (e) {}
-        function tr(key) { return (I18N[appLang] && I18N[appLang][key]) || I18N.en[key] || key; }
-        function applyLang(l) {
-            appLang = l;
-            document.documentElement.lang = l;
-            document.documentElement.dir = (l === 'ar') ? 'rtl' : 'ltr';
-            const btn = document.getElementById('lang-btn'); if (btn) btn.textContent = (l === 'ar') ? 'EN' : 'ع';
-            document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = tr(el.dataset.i18n); });
-            document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = tr(el.dataset.i18nPh); });
-        }
-        function toggleLang() { const next = appLang === 'ar' ? 'en' : 'ar'; try { localStorage.setItem('lang', next); } catch (e) {} applyLang(next); }
-        applyLang(appLang);
 
         /* ---------- helpers ---------- */
         function escapeHtml(str) {
@@ -1234,7 +1208,7 @@
             if (currentChatType === 'dm' && currentChatId === data.user_id) {
                 currentChatType = null; currentChatId = null;
                 document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128465;</div><div>This user was deleted.</div></div>';
-                document.getElementById('chat-title').textContent = tr('select_chat');
+                document.getElementById('chat-title').textContent = 'Select a chat to begin';
                 document.getElementById('chat-subtitle').textContent = '';
                 document.getElementById('menu-wrap').style.display = 'none';
                 ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
@@ -1410,7 +1384,7 @@
                 if (currentChatType === 'dm' && currentChatId === data.user_id) {
                     currentChatType = null; currentChatId = null;
                     document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128683;</div><div>You blocked this user.</div></div>';
-                    document.getElementById('chat-title').textContent = tr('select_chat');
+                    document.getElementById('chat-title').textContent = 'Select a chat to begin';
                     document.getElementById('chat-subtitle').textContent = '';
                     document.getElementById('menu-wrap').style.display = 'none';
                 }
@@ -1789,7 +1763,7 @@
             if (currentChatType === 'group' && currentChatId === data.id) {
                 currentChatType = null; currentChatId = null;
                 document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128075;</div><div>You were removed from this group.</div></div>';
-                document.getElementById('chat-title').textContent = tr('select_chat');
+                document.getElementById('chat-title').textContent = 'Select a chat to begin';
                 document.getElementById('chat-subtitle').textContent = '';
                 document.getElementById('header-actions').innerHTML = '';
                 document.getElementById('header-avatar').style.display = 'none';
@@ -1829,8 +1803,8 @@
             } else {
                 applyGroupHeaderPhoto(id, name); subtitle.textContent = ''; subtitle.classList.remove('online');
                 headerActions.innerHTML = `
-                    <button class="action-btn btn-light" onclick="viewParticipants()">${tr('participants')}</button>
-                    <button class="action-btn btn-danger" onclick="leaveGroup()">${tr('leave')}</button>`;
+                    <button class="action-btn btn-light" onclick="viewParticipants()">Participants</button>
+                    <button class="action-btn btn-danger" onclick="leaveGroup()">Leave</button>`;
             }
 
             document.getElementById('chat-box').innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
