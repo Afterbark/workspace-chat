@@ -1859,6 +1859,47 @@ def export_chat():
         text_out, mimetype='text/plain',
         headers={'Content-Disposition': 'attachment; filename="chat_export.txt"'})
 
+@app.route('/giphy_search')
+@login_required
+def giphy_search():
+    """Server-side Giphy search so the browser never calls api.giphy.com
+    directly (works on networks that block Giphy)."""
+    if not _REQUESTS_AVAILABLE or not os.environ.get('GIPHY_API_KEY'):
+        return {'results': []}
+    q = (request.args.get('q') or '').strip()
+    base = 'https://api.giphy.com/v1/gifs/search' if q else 'https://api.giphy.com/v1/gifs/trending'
+    params = {'api_key': os.environ['GIPHY_API_KEY'], 'limit': 24, 'rating': 'pg-13'}
+    if q:
+        params['q'] = q
+    try:
+        r = _requests.get(base, params=params, timeout=6)
+        data = r.json()
+        out = []
+        for g in data.get('data', []):
+            imgs = g.get('images', {})
+            thumb = (imgs.get('fixed_width') or {}).get('url')
+            full = (imgs.get('downsized_medium') or {}).get('url') or (imgs.get('original') or {}).get('url')
+            if thumb and full:
+                out.append({'thumb': thumb, 'full': full})
+        return {'results': out}
+    except Exception:
+        return {'results': []}
+
+@app.route('/gifproxy')
+@login_required
+def gifproxy():
+    """Stream a GIF (Giphy/Tenor only) through our domain to bypass network blocks."""
+    url = request.args.get('url', '')
+    if not _REQUESTS_AVAILABLE or not _is_allowed_gif(url):
+        return "Not allowed", 403
+    try:
+        r = _requests.get(url, timeout=8, stream=True)
+        ct = r.headers.get('Content-Type', 'image/gif')
+        return app.response_class(r.iter_content(chunk_size=8192), mimetype=ct,
+                                  headers={'Cache-Control': 'public, max-age=86400'})
+    except Exception:
+        return "Error", 502
+
 # ---------- scheduled message delivery (background) ----------
 
 def deliver_scheduled(sm):

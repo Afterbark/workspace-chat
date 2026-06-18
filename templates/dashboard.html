@@ -791,9 +791,16 @@
         }
 
         /* ---------- message rendering ---------- */
+        function proxiedGif(url) {
+            try {
+                const h = new URL(url, location.origin).hostname;
+                if (h.endsWith('giphy.com') || h.endsWith('tenor.com') || h.endsWith('tenor.co')) return '/gifproxy?url=' + encodeURIComponent(url);
+            } catch (e) {}
+            return url;
+        }
         function buildFileHtml(fileUrl, fileType, fileName) {
             if (!fileUrl) return '';
-            if (fileType === 'image') return `<img src="${fileUrl}" class="chat-img" onclick="openLightbox('${fileUrl}')">`;
+            if (fileType === 'image') { const u = proxiedGif(fileUrl); return `<img src="${u}" class="chat-img" onclick="openLightbox('${u}')">`; }
             if (fileType === 'video') return `<video controls><source src="${fileUrl}"></video>`;
             if (fileType === 'audio') return `<audio controls><source src="${fileUrl}"></audio>`;
             return `<a class="file-chip" href="${fileUrl}" target="_blank" download="${escapeHtml(fileName)}">&#128206; ${escapeHtml(fileName)}</a>`;
@@ -1514,24 +1521,20 @@
             clearTimeout(gifSearchTimer);
             gifSearchTimer = setTimeout(() => loadGifs(q.trim()), 300);
         }
+        function gifProxy(url) { return '/gifproxy?url=' + encodeURIComponent(url); }
         function loadGifs(q) {
             const box = document.getElementById('gif-results');
             box.innerHTML = '<div class="gif-note">Loading…</div>';
-            const base = q
-                ? `https://api.giphy.com/v1/gifs/search?q=${encodeURIComponent(q)}&`
-                : 'https://api.giphy.com/v1/gifs/trending?';
-            fetch(`${base}api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`)
+            fetch('/giphy_search?q=' + encodeURIComponent(q || ''))
                 .then(r => r.json())
                 .then(data => {
-                    if (!data.data || !data.data.length) { box.innerHTML = '<div class="gif-note">No GIFs found.</div>'; return; }
+                    const results = data.results || [];
+                    if (!results.length) { box.innerHTML = '<div class="gif-note">No GIFs found.</div>'; return; }
                     box.innerHTML = '';
-                    data.data.forEach(g => {
-                        const thumb = g.images.fixed_width && g.images.fixed_width.url;
-                        const full = (g.images.downsized_medium && g.images.downsized_medium.url) || (g.images.original && g.images.original.url);
-                        if (!thumb || !full) return;
+                    results.forEach(g => {
                         const img = document.createElement('img');
-                        img.src = thumb; img.loading = 'lazy'; img.alt = 'GIF';
-                        img.onclick = () => sendGif(full);
+                        img.src = gifProxy(g.thumb); img.loading = 'lazy'; img.alt = 'GIF';
+                        img.onclick = () => sendGif(g.full);
                         box.appendChild(img);
                     });
                 })
