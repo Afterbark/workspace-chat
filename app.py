@@ -196,6 +196,7 @@ class Message(db.Model):
     reply_to_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=True)
     pinned = db.Column(db.Boolean, default=False)
     forwarded = db.Column(db.Boolean, default=False)
+    is_system = db.Column(db.Boolean, default=False)
 
 # Tracks which user has read which message (powers "Seen" / unread counts).
 class MessageRead(db.Model):
@@ -315,6 +316,8 @@ def safe_auto_migrate():
             to_add.append("ALTER TABLE message ADD COLUMN pinned BOOLEAN DEFAULT FALSE")
         if 'forwarded' not in cols:
             to_add.append("ALTER TABLE message ADD COLUMN forwarded BOOLEAN DEFAULT FALSE")
+        if 'is_system' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN is_system BOOLEAN DEFAULT FALSE")
         try:
             gcols = {c['name'] for c in insp.get_columns('chat_group')}
             if 'photo' not in gcols:
@@ -403,6 +406,7 @@ def serialize_message(m):
         'reactions': get_reactions(m.id),
         'pinned': bool(m.pinned),
         'forwarded': bool(m.forwarded),
+        'is_system': bool(m.is_system),
         'preview': None if m.is_deleted else get_content_preview(m.content),
     }
 
@@ -469,6 +473,7 @@ def serialize_messages(msgs):
             'reactions': reactions,
             'pinned': bool(m.pinned),
             'forwarded': bool(m.forwarded),
+            'is_system': bool(m.is_system),
             'preview': preview,
         })
     return out
@@ -494,7 +499,7 @@ def get_seen_state(chat_type, chat_id, me_id):
 def get_unread(chat_type, chat_id, me_id):
     """Count messages from others in this chat that the user hasn't read."""
     ids = [r.id for r in base_chat_query(chat_type, chat_id, me_id)
-           .filter(Message.sender_id != me_id, Message.is_deleted == False)
+           .filter(Message.sender_id != me_id, Message.is_deleted == False, Message.is_system == False)
            .with_entities(Message.id).all()]
     if not ids:
         return 0
@@ -541,6 +546,24 @@ def _participant_lists(group):
                    for u in User.query.order_by(func.lower(User.username)).all()
                    if u.id not in member_ids]
     return members, non_members
+
+def post_group_system(group, text, actor_id=None):
+    """Create and broadcast a system message (e.g. 'X added Y') in a group."""
+    msg = Message(sender_id=actor_id or current_user.id, group_id=group.id, content=text, is_system=True)
+    db.session.add(msg)
+    db.session.commit()
+    packet = {
+        'msg_id': msg.id, 'username': '', 'message': text,
+        'file_url': None, 'file_type': None, 'file_name': None,
+        'type': 'group', 'group_id': group.id, 'sender_id': msg.sender_id,
+        'timestamp': fmt_time(msg.timestamp), 'ts_iso': iso_utc(msg.timestamp),
+        'mentions': [], 'reply_to': None, 'reactions': [], 'edited': False,
+        'pinned': False, 'forwarded': False, 'preview': None, 'is_system': True,
+        'group_name': group.name,
+    }
+    for u in group.members:
+        socketio.emit('receive_message', packet, to=f"user_sys_{u.id}")
+    socketio.emit('receive_message', packet, to=f"group_{group.id}")
 
 def group_roles(group):
     admin_ids = [u.id for u in group.admins]
@@ -834,7 +857,8 @@ def reset_password():
 def dashboard():
     blocked_ids = {b.blocked_id for b in BlockedUser.query.filter_by(blocker_id=current_user.id).all()}
     all_users = [u for u in User.query.filter(User.id != current_user.id).all() if u.id not in blocked_ids]
-    user_groups = current_user.groups
+    # Site admins can see every group; everyone else sees only their own.
+    user_groups = ChatGroup.query.order_by(func.lower(ChatGroup.name)).all() if is_site_admin(current_user) else current_user.groups
     user_dict = {u.id: u for u in User.query.all()}
     dm_unread = {u.id: get_unread('dm', u.id, current_user.id) for u in all_users}
     group_unread = {g.id: get_unread('group', g.id, current_user.id) for g in user_groups}
@@ -1052,6 +1076,7 @@ def create_group():
         db.session.commit()
         for user in new_group.members:
             socketio.emit('new_group', {'id': new_group.id, 'name': new_group.name}, to=f"user_sys_{user.id}")
+        post_group_system(new_group, f"{current_user.username} created the group")
     return redirect(url_for('dashboard'))
 
 @app.route('/leave_group/<int:group_id>')
@@ -1059,8 +1084,13 @@ def create_group():
 def leave_group(group_id):
     group = ChatGroup.query.get(group_id)
     if group and current_user in group.members:
+        uname = current_user.username
         group.members.remove(current_user)
+        if current_user in group.admins:
+            group.admins.remove(current_user)
         db.session.commit()
+        post_group_system(group, f"{uname} left the group", actor_id=current_user.id)
+        broadcast_participants(group)
     return redirect(url_for('dashboard'))
 
 @app.route('/logout')
@@ -1119,11 +1149,11 @@ def on_disconnect():
 @socketio.on('get_participants')
 def on_get_participants(data):
     group = ChatGroup.query.get(int(data['group_id']))
-    if not group or current_user not in group.members:
+    if not group or (current_user not in group.members and not is_site_admin(current_user)):
         return
     members, non_members = _participant_lists(group)
     payload = {'group_id': group.id, 'members': members, 'non_members': non_members,
-               'can_manage': is_group_admin(group, current_user)}
+               'can_manage': is_group_admin(group, current_user) or is_site_admin(current_user)}
     payload.update(group_roles(group))
     emit('show_participants', payload)
 
@@ -1157,6 +1187,7 @@ def on_add_participant(data):
     db.session.commit()
     socketio.emit('new_group', {'id': group.id, 'name': group.name}, to=f"user_sys_{user.id}")
     broadcast_participants(group)
+    post_group_system(group, f"{current_user.username} added {user.username} to the group")
 
 @socketio.on('remove_participant')
 def on_remove_participant(data):
@@ -1166,6 +1197,7 @@ def on_remove_participant(data):
         return
     if user not in group.members or user.id == group.owner_id:
         return  # can't remove the owner
+    removed_name = user.username
     group.members.remove(user)
     if user in group.admins:
         group.admins.remove(user)
@@ -1174,6 +1206,7 @@ def on_remove_participant(data):
         'id': group.id, 'name': group.name, 'by': current_user.username
     }, to=f"user_sys_{user.id}")
     broadcast_participants(group)
+    post_group_system(group, f"{current_user.username} removed {removed_name} from the group")
 
 @socketio.on('join_chat')
 def on_join(data):
@@ -1431,6 +1464,7 @@ def on_search(data):
 
     msgs = Message.query.filter(
         Message.is_deleted == False,
+        Message.is_system == False,
         Message.content.isnot(None),
         Message.content.ilike(like),
         or_(*scope_conds)
@@ -1478,6 +1512,7 @@ def on_rename_group(data):
     db.session.commit()
     for u in group.members:
         socketio.emit('group_updated', {'id': group.id, 'name': group.name, 'photo': group.photo}, to=f"user_sys_{u.id}")
+    post_group_system(group, f"{current_user.username} renamed the group to {group.name}")
 
 @socketio.on('pin_message')
 def on_pin_message(data):

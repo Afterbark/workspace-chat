@@ -95,6 +95,9 @@
 
         .date-sep { align-self: center; background: var(--panel); color: var(--text-soft); font-size: 12px;
             font-weight: 600; padding: 4px 14px; border-radius: 999px; margin: 14px 0 10px; box-shadow: var(--shadow); }
+        .system-row { display: flex; justify-content: center; margin: 8px 0; }
+        .system-msg { background: var(--panel); color: var(--text-soft); font-size: 12.5px; padding: 5px 14px;
+            border-radius: 999px; box-shadow: var(--shadow); max-width: 80%; text-align: center; }
 
         .message-row { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 3px; max-width: 75%; position: relative; }
         .message-row.mine { align-self: flex-end; flex-direction: row-reverse; }
@@ -814,6 +817,13 @@
             row.dataset.pinned = msg.pinned ? '1' : '';
             const text = (msg.content !== undefined ? msg.content : msg.message) || '';
             row.dataset.content = text;
+
+            if (msg.is_system) {
+                row.className = 'system-row';
+                row.dataset.senderId = 'system';
+                row.innerHTML = `<div class="system-msg">${escapeHtml(text)}</div>`;
+                return row;
+            }
 
             const avatar = `<img src="${avatarFor(msg.sender_id, msg.sender || msg.username)}" class="row-avatar" data-uname="${escapeHtml(msg.sender || msg.username || '')}" onerror="avatarFallback(this)">`;
 
@@ -1875,6 +1885,16 @@
                 (data.type === 'dm' && currentChatType === 'dm' && (data.sender_id === currentChatId || data.sender_id === myUserId)) ||
                 (data.type === 'group' && currentChatType === 'group' && data.group_id === currentChatId);
             const mentionsMe = Array.isArray(data.mentions) && data.mentions.includes(myUserId);
+
+            if (data.is_system) {
+                if (inThisChat) {
+                    const chatBox = document.getElementById('chat-box');
+                    const nearBottom = (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight) < 140;
+                    appendMessage({ msg_id: data.msg_id, sender_id: 'system', content: data.message, ts_iso: data.ts_iso, is_system: true });
+                    if (nearBottom) chatBox.scrollTop = chatBox.scrollHeight;
+                }
+                return;
+            }
 
             if (inThisChat) {
                 const chatBox = document.getElementById('chat-box');
