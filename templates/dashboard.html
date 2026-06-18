@@ -688,13 +688,20 @@
             img.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(n)}&background=2563eb&color=fff`;
         }
         window.avatarFallback = avatarFallback;
+        const APP_TZ = 'Asia/Amman';
+        function formatAmmanTime(iso) {
+            if (!iso) return '';
+            try { return new Date(iso).toLocaleTimeString('en-US', { timeZone: APP_TZ, hour: 'numeric', minute: '2-digit', hour12: true }); }
+            catch (e) { return ''; }
+        }
+        function ammanDayKey(d) { return d.toLocaleDateString('en-CA', { timeZone: APP_TZ }); } // "YYYY-MM-DD" in Amman
         function dateLabel(iso) {
-            const d = new Date(iso); const now = new Date();
-            const sameDay = (a, b) => a.toDateString() === b.toDateString();
-            const yest = new Date(now); yest.setDate(now.getDate() - 1);
-            if (sameDay(d, now)) return 'Today';
-            if (sameDay(d, yest)) return 'Yesterday';
-            return d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+            const d = new Date(iso), now = new Date();
+            const key = ammanDayKey(d), today = ammanDayKey(now);
+            const yest = ammanDayKey(new Date(now.getTime() - 86400000));
+            if (key === today) return 'Today';
+            if (key === yest) return 'Yesterday';
+            return d.toLocaleDateString('en-US', { timeZone: APP_TZ, month: 'long', day: 'numeric', year: 'numeric' });
         }
 
         /* ---------- audio + notifications ---------- */
@@ -808,7 +815,7 @@
                 ${avatar}
                 <div class="msg-col">
                     ${replyHtml}
-                    <div class="bubble">${fwdTag}${senderHtml}${textHtml}${fileHtml}${previewHtml}<span class="time">${msg.timestamp || ''}${editedTag}</span></div>
+                    <div class="bubble">${fwdTag}${senderHtml}${textHtml}${fileHtml}${previewHtml}<span class="time">${formatAmmanTime(msg.ts_iso) || msg.timestamp || ''}${editedTag}</span></div>
                     <div class="reactions"></div>
                 </div>
                 ${actions}`;
@@ -872,7 +879,7 @@
             chatBox.querySelectorAll('.message-row').forEach(row => {
                 const iso = row.dataset.ts;
                 if (!iso) return;
-                const day = new Date(iso).toDateString();
+                const day = ammanDayKey(new Date(iso));
                 if (day !== lastDay) {
                     const sep = document.createElement('div');
                     sep.className = 'date-sep';
@@ -1490,9 +1497,8 @@
             const mins = Math.floor((now - d) / 60000);
             if (mins < 1) return 'last seen just now';
             if (mins < 60) return `last seen ${mins}m ago`;
-            const hrs = Math.floor(mins / 60);
-            if (hrs < 24 && d.toDateString() === now.toDateString()) return `last seen at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-            return `last seen ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+            if (ammanDayKey(d) === ammanDayKey(now)) return `last seen at ${formatAmmanTime(iso)}`;
+            return `last seen ${d.toLocaleDateString('en-US', { timeZone: APP_TZ, month: 'short', day: 'numeric' })}`;
         }
         const userStatus = {}; // uid -> 'active' | 'away'
         function setDmSubtitle(uid) {

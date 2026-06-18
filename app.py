@@ -29,9 +29,13 @@ def to_amman(dt):
 def fmt_time(dt):
     return to_amman(dt).strftime('%I:%M %p')
 
-def iso_amman(dt):
-    # naive ISO carrying Jordan wall-clock time (so client date separators match)
-    return to_amman(dt).replace(tzinfo=None).isoformat()
+def iso_utc(dt):
+    # Unambiguous UTC instant; the client renders it in Asia/Amman for everyone.
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC_TZ)
+    return dt.astimezone(UTC_TZ).isoformat()
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, inspect, text, and_, or_
@@ -384,7 +388,7 @@ def serialize_message(m):
         'file_type': None if m.is_deleted else m.file_type,
         'file_name': None if m.is_deleted else m.file_name,
         'timestamp': fmt_time(m.timestamp),
-        'ts_iso': iso_amman(m.timestamp),
+        'ts_iso': iso_utc(m.timestamp),
         'edited': bool(m.edited),
         'is_deleted': bool(m.is_deleted),
         'reply_to': reply_preview(m.reply_to_id),
@@ -824,7 +828,7 @@ def dashboard():
     archived = [f"{a.chat_type}:{a.chat_id}" for a in ArchivedChat.query.filter_by(user_id=current_user.id).all()]
     online_now = list(online_users.keys())
     online_status = {uid: user_status.get(uid, 'active') for uid in online_now}
-    last_seen = {u.id: (iso_amman(u.last_seen) if u.last_seen else None) for u in all_users}
+    last_seen = {u.id: (iso_utc(u.last_seen) if u.last_seen else None) for u in all_users}
 
     return render_template('dashboard.html', users=all_users, groups=user_groups,
                            user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
@@ -994,7 +998,7 @@ def upload_chat_file():
             'file_url': file_url, 'file_type': file_category, 'file_name': filename,
             'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
             'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
-            'ts_iso': iso_amman(new_msg.timestamp), 'mentions': [],
+            'ts_iso': iso_utc(new_msg.timestamp), 'mentions': [],
             'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
             'pinned': False, 'forwarded': False, 'preview': None
         }
@@ -1092,7 +1096,7 @@ def on_disconnect():
                 if u:
                     u.last_seen = datetime.now()
                     db.session.commit()
-                    ls = iso_amman(u.last_seen)
+                    ls = iso_utc(u.last_seen)
             except Exception:
                 db.session.rollback()
             socketio.emit('presence_update', {'user_id': uid, 'online': False, 'last_seen': ls})
@@ -1185,7 +1189,7 @@ def on_join(data):
             payload['can_manage'] = is_group_admin(group, current_user)
     else:
         other = User.query.get(chat_id)
-        payload['last_seen'] = iso_amman(other.last_seen) if (other and other.last_seen) else None
+        payload['last_seen'] = iso_utc(other.last_seen) if (other and other.last_seen) else None
 
     emit('load_history', payload)
 
@@ -1276,7 +1280,7 @@ def handle_message(data):
         'file_url': None, 'file_type': None, 'file_name': None,
         'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
         'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
-        'ts_iso': iso_amman(new_msg.timestamp), 'mentions': mentions,
+        'ts_iso': iso_utc(new_msg.timestamp), 'mentions': mentions,
         'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
         'pinned': False, 'forwarded': False, 'preview': None
     }
@@ -1331,7 +1335,7 @@ def on_send_gif(data):
         'file_url': url, 'file_type': 'image', 'file_name': 'gif.gif',
         'type': ct, 'group_id': cid if ct == 'group' else None,
         'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
-        'ts_iso': iso_amman(new_msg.timestamp), 'mentions': [],
+        'ts_iso': iso_utc(new_msg.timestamp), 'mentions': [],
         'reply_to': None, 'reactions': [], 'edited': False,
         'pinned': False, 'forwarded': False, 'preview': None
     }
@@ -1506,7 +1510,7 @@ def on_forward_message(data):
         'file_url': new_msg.file_url, 'file_type': new_msg.file_type, 'file_name': new_msg.file_name,
         'type': target_type, 'group_id': target_id if target_type == 'group' else None,
         'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
-        'ts_iso': iso_amman(new_msg.timestamp), 'mentions': [],
+        'ts_iso': iso_utc(new_msg.timestamp), 'mentions': [],
         'reply_to': None, 'reactions': [], 'edited': False,
         'pinned': False, 'forwarded': True, 'preview': None
     }
@@ -1745,7 +1749,7 @@ def deliver_scheduled(sm):
         'file_url': None, 'file_type': None, 'file_name': None,
         'type': sm.chat_type, 'group_id': sm.chat_id if sm.chat_type == 'group' else None,
         'sender_id': sm.sender_id, 'timestamp': fmt_time(new_msg.timestamp),
-        'ts_iso': iso_amman(new_msg.timestamp), 'mentions': mentions,
+        'ts_iso': iso_utc(new_msg.timestamp), 'mentions': mentions,
         'reply_to': None, 'reactions': [], 'edited': False,
         'pinned': False, 'forwarded': False, 'preview': None
     }
