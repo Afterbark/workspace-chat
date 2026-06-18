@@ -148,6 +148,8 @@ PAGE_SIZE = 30
 
 # In-memory presence tracking: user_id -> number of active socket connections.
 online_users = {}
+# user_id -> 'active' | 'away'
+user_status = {}
 
 group_members = db.Table('group_members',
     db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
@@ -821,12 +823,13 @@ def dashboard():
     muted = [f"{m.chat_type}:{m.chat_id}" for m in MutedChat.query.filter_by(user_id=current_user.id).all()]
     archived = [f"{a.chat_type}:{a.chat_id}" for a in ArchivedChat.query.filter_by(user_id=current_user.id).all()]
     online_now = list(online_users.keys())
+    online_status = {uid: user_status.get(uid, 'active') for uid in online_now}
     last_seen = {u.id: (iso_amman(u.last_seen) if u.last_seen else None) for u in all_users}
 
     return render_template('dashboard.html', users=all_users, groups=user_groups,
                            user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
                            vapid_public_key=VAPID_PUBLIC_KEY, muted=muted, archived=archived,
-                           online_now=online_now, last_seen=last_seen, blocked_ids=list(blocked_ids),
+                           online_now=online_now, online_status=online_status, last_seen=last_seen, blocked_ids=list(blocked_ids),
                            giphy_api_key=os.environ.get('GIPHY_API_KEY', ''),
                            is_admin=is_site_admin(current_user),
                            pending_requests=([serialize_request(r) for r in ApprovalRequest.query.order_by(ApprovalRequest.id.desc()).all()]
@@ -1055,9 +1058,23 @@ def on_register_user():
     join_room(f"user_sys_{current_user.id}")
     # presence
     online_users[current_user.id] = online_users.get(current_user.id, 0) + 1
+    user_status[current_user.id] = 'active'
     if online_users[current_user.id] == 1:
-        socketio.emit('presence_update', {'user_id': current_user.id, 'online': True})
-    emit('presence_state', {'online': list(online_users.keys())})
+        socketio.emit('presence_update', {'user_id': current_user.id, 'online': True, 'status': 'active'})
+    emit('presence_state', {
+        'online': list(online_users.keys()),
+        'statuses': {uid: user_status.get(uid, 'active') for uid in online_users}
+    })
+
+@socketio.on('presence_status')
+def on_presence_status(data):
+    if not current_user.is_authenticated or current_user.id not in online_users:
+        return
+    status = 'away' if data.get('status') == 'away' else 'active'
+    if user_status.get(current_user.id) == status:
+        return
+    user_status[current_user.id] = status
+    socketio.emit('presence_update', {'user_id': current_user.id, 'online': True, 'status': status})
 
 @socketio.on('disconnect')
 def on_disconnect():
@@ -1068,6 +1085,7 @@ def on_disconnect():
         online_users[uid] -= 1
         if online_users[uid] <= 0:
             online_users.pop(uid, None)
+            user_status.pop(uid, None)
             ls = None
             try:
                 u = User.query.get(uid)

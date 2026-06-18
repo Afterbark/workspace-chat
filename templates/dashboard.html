@@ -64,6 +64,7 @@
         .dot { position: absolute; bottom: 1px; right: 1px; width: 12px; height: 12px; border-radius: 50%;
             background: var(--green); border: 2px solid var(--sidebar); display: none; }
         .dot.on { display: block; }
+        .dot.away { background: #f59e0b; }
         .item .group-ic { width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; display: flex;
             align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 18px; }
         .item .name { flex: 1; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -84,6 +85,7 @@
         .chat-header .h-title { font-weight: 700; font-size: 17px; }
         .chat-header .h-sub { font-size: 12px; color: var(--text-soft); }
         .chat-header .h-sub.online { color: var(--green); font-weight: 600; }
+        .chat-header .h-sub.away { color: #f59e0b; font-weight: 600; }
         #header-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 
         #chat-box { flex: 1; padding: 22px 8%; overflow-y: auto; display: flex; flex-direction: column; }
@@ -537,6 +539,10 @@
                 <button class="modal-btn ghost" id="enable-push-btn" onclick="enablePush()">Enable background push notifications</button>
                 <div class="settings-msg" id="push-msg"></div>
             </div>
+            <div class="settings-row">
+                <label>Blocked users</label>
+                <div id="blocked-list" style="border:1px solid var(--border); border-radius:10px;"></div>
+            </div>
             {% if is_admin %}
             <div class="settings-row">
                 <label>Admin &mdash; delete users</label>
@@ -614,6 +620,7 @@
         const blockedIds = new Set({{ blocked_ids|tojson }});
         const lastSeenMap = {{ last_seen|tojson }};
         const initialOnline = {{ online_now|tojson }};
+        const initialStatus = {{ online_status|tojson }};
         const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
         let pendingRequests = {{ pending_requests|tojson }};
     </script>
@@ -700,6 +707,7 @@
             if (!notifAsked && 'Notification' in window && Notification.permission === 'default') {
                 notifAsked = true; try { Notification.requestPermission(); } catch (e) {}
             }
+            startIdleDetector();
         }
         document.addEventListener('click', initInteractions);
         function playNotif(strong) {
@@ -1075,6 +1083,7 @@
             document.getElementById('set-new-pw').value = '';
             document.getElementById('vol-slider').value = Math.round(notifVolume * 100);
             updatePushButton();
+            renderBlockedList();
             document.getElementById('settingsModal').style.display = 'block';
         }
         function postForm(url, fields) {
@@ -1269,14 +1278,49 @@
             refreshArchivedToggle();
             showToast('Chat', data.archived ? 'Archived' : 'Unarchived');
         });
+        function renderBlockedList() {
+            const box = document.getElementById('blocked-list');
+            if (!box) return;
+            const ids = Array.from(blockedIds);
+            if (!ids.length) { box.innerHTML = '<div class="search-empty" style="padding:14px;">No blocked users.</div>'; return; }
+            box.innerHTML = '';
+            ids.forEach(id => {
+                const row = document.createElement('div');
+                row.className = 'req-row';
+                row.innerHTML = `<span style="flex:1; font-weight:600;">${escapeHtml(userNames[id] || 'User')}</span>
+                    <button class="modal-btn primary" style="padding:6px 12px;" onclick="unblockUser(${id})">Unblock</button>`;
+                box.appendChild(row);
+            });
+        }
+        function unblockUser(id) { socket.emit('unblock_user', { user_id: id }); }
+
         socket.on('block_updated', function(data) {
             if (data.blocked) {
                 blockedIds.add(data.user_id);
                 const nav = document.getElementById('nav-dm-' + data.user_id);
                 if (nav) nav.remove();
-                if (currentChatType === 'dm' && currentChatId === data.user_id) location.reload();
-                showToast('Blocked', 'You will no longer exchange messages with this user.');
-            } else { blockedIds.delete(data.user_id); showToast('Unblocked', 'Reload to see this conversation again.'); }
+                if (currentChatType === 'dm' && currentChatId === data.user_id) {
+                    currentChatType = null; currentChatId = null;
+                    document.getElementById('chat-box').innerHTML = '<div class="empty-state"><div class="big">&#128683;</div><div>You blocked this user.</div></div>';
+                    document.getElementById('chat-title').textContent = 'Select a chat to begin';
+                    document.getElementById('chat-subtitle').textContent = '';
+                    document.getElementById('menu-wrap').style.display = 'none';
+                }
+                showToast('Blocked', 'You will no longer exchange messages with this user. Unblock anytime in Settings.');
+            } else {
+                blockedIds.delete(data.user_id);
+                const name = userNames[data.user_id];
+                if (name && !document.getElementById('nav-dm-' + data.user_id)) {
+                    document.getElementById('dm-list').insertAdjacentHTML('beforeend', `
+                        <div class="item chat-nav" id="nav-dm-${data.user_id}" data-name="${name.toLowerCase()}" onclick="openChat('dm', ${data.user_id}, '${name}')">
+                            <span class="avatar-wrap"><img src="${avatarFor(data.user_id, name)}" class="profile-pic" data-uname="${escapeHtml(name)}" onerror="avatarFallback(this)"><span class="dot" id="dot-${data.user_id}"></span></span>
+                            <span class="name">${escapeHtml(name)}</span>
+                            <span class="badge" id="badge-dm-${data.user_id}" style="display:none;">0</span>
+                        </div>`);
+                }
+                showToast('Unblocked', `${name || 'User'} can message you again.`);
+            }
+            renderBlockedList();
         });
         socket.on('report_ack', function() { showToast('Report submitted', 'Thanks — our team will review it.'); });
 
@@ -1450,27 +1494,75 @@
             if (hrs < 24 && d.toDateString() === now.toDateString()) return `last seen at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
             return `last seen ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
         }
+        const userStatus = {}; // uid -> 'active' | 'away'
         function setDmSubtitle(uid) {
             const sub = document.getElementById('chat-subtitle');
-            const on = onlineUsers.has(uid);
-            sub.textContent = on ? 'Online' : formatLastSeen(lastSeenMap[uid]);
-            sub.classList.toggle('online', on);
+            if (onlineUsers.has(uid)) {
+                const away = userStatus[uid] === 'away';
+                sub.textContent = away ? 'Away' : 'Active now';
+                sub.classList.toggle('online', !away);
+                sub.classList.toggle('away', away);
+            } else {
+                sub.textContent = formatLastSeen(lastSeenMap[uid]);
+                sub.classList.remove('online'); sub.classList.remove('away');
+            }
         }
-        function setPresence(uid, online) {
-            if (online) onlineUsers.add(uid); else onlineUsers.delete(uid);
+        function applyPresence(uid, online, status) {
+            if (online) { onlineUsers.add(uid); userStatus[uid] = status || 'active'; }
+            else { onlineUsers.delete(uid); delete userStatus[uid]; }
             const dot = document.getElementById('dot-' + uid);
-            if (dot) dot.classList.toggle('on', online);
+            if (dot) {
+                dot.classList.toggle('on', online);
+                dot.classList.toggle('away', online && userStatus[uid] === 'away');
+            }
             if (currentChatType === 'dm' && currentChatId === uid) setDmSubtitle(uid);
         }
-        initialOnline.forEach(uid => { if (uid !== myUserId) onlineUsers.add(uid); });
+        initialOnline.forEach(uid => { if (uid !== myUserId) applyPresence(uid, true, (initialStatus && initialStatus[uid]) || 'active'); });
         socket.on('presence_state', function(data) {
-            (data.online || []).forEach(uid => { if (uid !== myUserId) setPresence(uid, true); });
+            const statuses = data.statuses || {};
+            (data.online || []).forEach(uid => { if (uid !== myUserId) applyPresence(uid, true, statuses[uid] || 'active'); });
         });
         socket.on('presence_update', function(data) {
             if (data.user_id === myUserId) return;
             if (data.last_seen) lastSeenMap[data.user_id] = data.last_seen;
-            setPresence(data.user_id, data.online);
+            applyPresence(data.user_id, data.online, data.status);
         });
+
+        /* ---------- my own active/away status (Teams-style) ---------- */
+        let myStatus = 'active';
+        let lastActivity = Date.now();
+        const IDLE_MS = 5 * 60 * 1000;
+        function reportStatus(s) {
+            if (s === myStatus) return;
+            myStatus = s;
+            socket.emit('presence_status', { status: s });
+        }
+        function refreshStatus() {
+            const away = document.hidden || (Date.now() - lastActivity > IDLE_MS);
+            reportStatus(away ? 'away' : 'active');
+        }
+        ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'].forEach(ev =>
+            document.addEventListener(ev, () => {
+                lastActivity = Date.now();
+                if (myStatus !== 'active' && !document.hidden) refreshStatus();
+            }, { passive: true }));
+        document.addEventListener('visibilitychange', refreshStatus);
+        setInterval(refreshStatus, 30000);
+        // Screen-lock / idle detection (Chrome Idle Detection API, needs permission)
+        let idleDetectorStarted = false;
+        async function startIdleDetector() {
+            if (idleDetectorStarted || !('IdleDetector' in window)) return;
+            idleDetectorStarted = true;
+            try {
+                if (await IdleDetector.requestPermission() !== 'granted') return;
+                const detector = new IdleDetector();
+                detector.addEventListener('change', () => {
+                    if (detector.screenState === 'locked' || detector.userState === 'idle') reportStatus('away');
+                    else if (!document.hidden) { lastActivity = Date.now(); reportStatus('active'); }
+                });
+                await detector.start({ threshold: 60000 });
+            } catch (e) {}
+        }
 
         /* ---------- sidebar / filter ---------- */
         function toggleSidebar(open) { document.getElementById('sidebar').classList.toggle('open', open); }
