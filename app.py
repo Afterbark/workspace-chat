@@ -38,7 +38,7 @@ def iso_utc(dt):
     return dt.astimezone(UTC_TZ).isoformat()
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func, inspect, text, and_, or_
+from sqlalchemy import func, inspect, text, and_, or_, exists
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -183,9 +183,9 @@ class ChatGroup(db.Model):
 
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('chat_group.id'), nullable=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('chat_group.id'), nullable=True, index=True)
     content = db.Column(db.Text, nullable=True)
     file_url = db.Column(db.String(250), nullable=True)
     file_type = db.Column(db.String(50), nullable=True)
@@ -334,6 +334,14 @@ def safe_auto_migrate():
                 to_add.append('ALTER TABLE "user" ADD COLUMN approved BOOLEAN DEFAULT TRUE')
         except Exception:
             pass
+        # Indexes on the hot message-filter columns. create_all() adds these for
+        # fresh DBs, but not to pre-existing tables, so we (idempotently) ensure them
+        # here. Both SQLite and Postgres support CREATE INDEX IF NOT EXISTS.
+        to_add += [
+            "CREATE INDEX IF NOT EXISTS ix_message_sender_id ON message (sender_id)",
+            "CREATE INDEX IF NOT EXISTS ix_message_receiver_id ON message (receiver_id)",
+            "CREATE INDEX IF NOT EXISTS ix_message_group_id ON message (group_id)",
+        ]
         for stmt in to_add:
             try:
                 db.session.execute(text(stmt))
@@ -496,17 +504,33 @@ def get_seen_state(chat_type, chat_id, me_id):
             state[reader_id] = {'name': reader.username, 'last_read_id': last_read}
     return state
 
-def get_unread(chat_type, chat_id, me_id):
-    """Count messages from others in this chat that the user hasn't read."""
-    ids = [r.id for r in base_chat_query(chat_type, chat_id, me_id)
-           .filter(Message.sender_id != me_id, Message.is_deleted == False, Message.is_system == False)
-           .with_entities(Message.id).all()]
-    if not ids:
-        return 0
-    read = MessageRead.query.filter(
-        MessageRead.user_id == me_id, MessageRead.message_id.in_(ids)
-    ).count()
-    return len(ids) - read
+def unread_counts(me_id, group_ids):
+    """Unread-message counts for ALL of a user's chats in two aggregate queries.
+
+    Replaces calling get_unread() once per user and once per group (which each
+    scanned a whole chat history). Returns ({other_user_id: count}, {group_id: count}).
+    A message is unread if it's from someone else, not deleted/system, and has no
+    MessageRead row for this user.
+    """
+    unread = and_(
+        Message.sender_id != me_id,
+        Message.is_deleted == False,
+        Message.is_system == False,
+        ~exists().where(and_(MessageRead.message_id == Message.id,
+                             MessageRead.user_id == me_id)),
+    )
+    dm_rows = (db.session.query(Message.sender_id, func.count(Message.id))
+               .filter(Message.receiver_id == me_id, unread)
+               .group_by(Message.sender_id).all())
+    dm_map = {sid: cnt for sid, cnt in dm_rows}
+
+    group_map = {}
+    if group_ids:
+        g_rows = (db.session.query(Message.group_id, func.count(Message.id))
+                  .filter(Message.group_id.in_(group_ids), unread)
+                  .group_by(Message.group_id).all())
+        group_map = {gid: cnt for gid, cnt in g_rows}
+    return dm_map, group_map
 
 def first_unread_id(chat_type, chat_id, me_id):
     """Oldest message from others that the user hasn't read yet (for the 'New messages' divider)."""
@@ -872,8 +896,9 @@ def dashboard():
     # Site admins can see every group; everyone else sees only their own.
     user_groups = ChatGroup.query.order_by(func.lower(ChatGroup.name)).all() if is_site_admin(current_user) else current_user.groups
     user_dict = {u.id: u for u in User.query.all()}
-    dm_unread = {u.id: get_unread('dm', u.id, current_user.id) for u in all_users}
-    group_unread = {g.id: get_unread('group', g.id, current_user.id) for g in user_groups}
+    dm_counts, group_counts = unread_counts(current_user.id, [g.id for g in user_groups])
+    dm_unread = {u.id: dm_counts.get(u.id, 0) for u in all_users}
+    group_unread = {g.id: group_counts.get(g.id, 0) for g in user_groups}
 
     muted = [f"{m.chat_type}:{m.chat_id}" for m in MutedChat.query.filter_by(user_id=current_user.id).all()]
     archived = [f"{a.chat_type}:{a.chat_id}" for a in ArchivedChat.query.filter_by(user_id=current_user.id).all()]
