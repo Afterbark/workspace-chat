@@ -65,6 +65,8 @@
             background: var(--green); border: 2px solid var(--sidebar); display: none; }
         .dot.on { display: block; }
         .dot.away { background: #f59e0b; }
+        .self-ic { position: absolute; bottom: -2px; right: -2px; width: 18px; height: 18px; border-radius: 50%;
+            background: var(--sidebar); border: 2px solid var(--sidebar); font-size: 11px; line-height: 16px; text-align: center; }
         .item .group-ic { width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; display: flex;
             align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 18px; }
         .item .name { flex: 1; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -154,14 +156,14 @@
         #priority-chip.important { background: rgba(234,179,8,.16); color: #a16207; }
         #priority-chip.urgent { background: rgba(239,68,68,.14); color: var(--danger); }
         #priority-chip .pc-x { margin-left: auto; cursor: pointer; background: none; border: none; font-size: 17px; color: inherit; }
-        #delivery-menu { position: absolute; bottom: 76px; right: 18px; min-width: 210px; background: var(--panel);
-            border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); display: none; z-index: 60; overflow: hidden; }
-        #delivery-menu .dm-opt { display: flex; flex-direction: column; gap: 1px; padding: 9px 13px; cursor: pointer; }
-        #delivery-menu .dm-opt:hover { background: var(--accent-soft); }
-        #delivery-menu .dm-opt b { font-size: 13.5px; }
-        #delivery-menu .dm-opt small { color: var(--text-soft); font-size: 11px; }
-        .compose-btn.armed-important { color: #a16207; }
-        .compose-btn.armed-urgent { color: var(--danger); }
+        #composer-menu { position: absolute; bottom: 76px; left: 18px; min-width: 215px; background: var(--panel);
+            border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); display: none; z-index: 60; padding: 5px; }
+        #composer-menu .cm-opt { display: flex; align-items: center; gap: 11px; padding: 9px 11px; cursor: pointer; border-radius: 8px; font-size: 14px; }
+        #composer-menu .cm-opt:hover { background: var(--accent-soft); }
+        #composer-menu .cm-ic { width: 24px; text-align: center; font-weight: 800; font-size: 15px; }
+        #composer-menu .cm-sep { height: 1px; background: var(--border); margin: 5px 8px; }
+        .compose-btn.armed-important { color: #a16207; background: rgba(234,179,8,.16); }
+        .compose-btn.armed-urgent { color: var(--danger); background: rgba(239,68,68,.14); }
 
         /* --- praise / kudos --- */
         .praise-card { background: linear-gradient(135deg, var(--accent-soft), transparent); border: 1px solid var(--accent);
@@ -459,6 +461,14 @@
         <div class="list-scroll">
             <div class="section-title">Direct Messages</div>
             <div id="dm-list">
+                {% set self_avatar = current_user.profile_pic if current_user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + current_user.profile_pic) if current_user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + current_user.username + '&background=2563eb&color=fff') %}
+                <div class="item chat-nav" id="nav-dm-{{ current_user.id }}" data-name="saved messages you {{ current_user.username|lower }}" onclick="openChat('dm', {{ current_user.id }}, 'Saved messages')">
+                    <span class="avatar-wrap">
+                        <img src="{{ self_avatar }}" class="profile-pic" data-uname="{{ current_user.username }}" onerror="avatarFallback(this)">
+                        <span class="self-ic" title="Notes to self">&#128221;</span>
+                    </span>
+                    <span class="name">Saved messages <small style="color:var(--text-soft); font-weight:500;">(you)</small></span>
+                </div>
                 {% for user in users %}
                     {% set avatar = user.profile_pic if user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=2563eb&color=fff') %}
                     <div class="item chat-nav" id="nav-dm-{{ user.id }}" data-name="{{ user.username|lower }}" onclick="openChat('dm', {{ user.id }}, '{{ user.username }}')">
@@ -533,10 +543,14 @@
         <div class="input-area">
             <div id="mention-box"></div>
             <div id="slash-box"></div>
-            <div id="delivery-menu">
-                <div class="dm-opt" onclick="setPriority('normal')"><b>Standard</b><small>Normal delivery</small></div>
-                <div class="dm-opt" onclick="setPriority('important')"><b>❗ Important</b><small>Flags the message as important</small></div>
-                <div class="dm-opt" onclick="setPriority('urgent')"><b>‼️ Urgent</b><small>Re-notifies the recipient until read</small></div>
+            <div id="composer-menu">
+                <div class="cm-opt" onclick="cmDo(openGifPicker)"><span class="cm-ic">GIF</span><span>Send a GIF</span></div>
+                <div class="cm-opt" onclick="cmDo(openSchedule)"><span class="cm-ic">&#128340;</span><span>Schedule message</span></div>
+                <div class="cm-opt" onclick="cmDo(openPraise)"><span class="cm-ic">&#128079;</span><span>Give praise</span></div>
+                <div class="cm-sep"></div>
+                <div class="cm-opt" onclick="setPriority('important')"><span class="cm-ic">&#10071;</span><span>Mark Important</span></div>
+                <div class="cm-opt" onclick="setPriority('urgent')"><span class="cm-ic">&#8252;&#65039;</span><span>Mark Urgent</span></div>
+                <div class="cm-opt" id="cm-clear-prio" onclick="setPriority('normal')" style="display:none;"><span class="cm-ic">&#10005;</span><span>Clear priority</span></div>
             </div>
             <div id="emoji-picker"></div>
             <div id="attachment-preview">
@@ -553,15 +567,12 @@
             </div>
             <div id="priority-chip"><span id="pc-text"></span><button class="pc-x" onclick="setPriority('normal')" title="Remove priority">&times;</button></div>
             <div class="input-controls">
-                <button id="attach-btn" class="compose-btn" onclick="document.getElementById('chat-file-input').click();" disabled>&#128206;</button>
                 <input type="file" id="chat-file-input" onchange="handleFiles(this.files)">
-                <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled>&#128512;</button>
-                <button id="gif-btn" class="compose-btn" onclick="openGifPicker()" disabled title="Send a GIF" style="font-size:12px;font-weight:800;">GIF</button>
+                <button id="plus-btn" class="compose-btn" onclick="toggleComposerMenu()" disabled title="More — GIF, schedule, praise, priority" style="font-weight:800; font-size:20px;">+</button>
+                <button id="attach-btn" class="compose-btn" onclick="document.getElementById('chat-file-input').click();" disabled title="Attach file">&#128206;</button>
+                <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled title="Emoji">&#128512;</button>
                 <button id="mic-btn" class="compose-btn" onclick="toggleRecording()" disabled title="Record voice message">&#127908;</button>
-                <button id="praise-btn" class="compose-btn" onclick="openPraise()" disabled title="Give praise">&#128079;</button>
-                <button id="deliver-btn" class="compose-btn" onclick="toggleDeliveryMenu()" disabled title="Delivery options" style="font-weight:800;">!</button>
                 <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
-                <button id="schedule-btn" class="compose-btn" onclick="openSchedule()" disabled title="Schedule message">&#128340;</button>
                 <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
             </div>
         </div>
@@ -1447,7 +1458,7 @@
                 document.getElementById('chat-title').textContent = 'Select a chat to begin';
                 document.getElementById('chat-subtitle').textContent = '';
                 document.getElementById('menu-wrap').style.display = 'none';
-                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'praise-btn', 'deliver-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
+                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'mic-btn', 'plus-btn'].forEach(b => document.getElementById(b).disabled = true);
             }
             showToast('User deleted', `${data.username} was removed.`);
             if (document.getElementById('adminDashModal').style.display === 'block') socket.emit('get_admin_dashboard');
@@ -2022,7 +2033,7 @@
                 document.getElementById('chat-subtitle').textContent = '';
                 document.getElementById('header-actions').innerHTML = '';
                 document.getElementById('menu-wrap').style.display = 'none';
-                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'praise-btn', 'deliver-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
+                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'mic-btn', 'plus-btn'].forEach(b => document.getElementById(b).disabled = true);
             }
             showToast('Group deleted', 'The group was removed.');
         });
@@ -2036,7 +2047,7 @@
             document.getElementById('pinned-banner').style.display = 'none';
             document.getElementById('new-msg-pill').style.display = 'none';
             clearComposerContext(); clearPendingAttachment(); hideMentionBox();
-            setPriority('normal'); hideSlashBox(); hideDeliveryMenu();
+            setPriority('normal'); hideSlashBox(); hideComposerMenu();
 
             document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
             const activeItem = document.getElementById('nav-' + type + '-' + id);
@@ -2052,7 +2063,8 @@
 
             if (type === 'dm') {
                 headerAvatar.dataset.uname = name; headerAvatar.src = avatarFor(id, name); headerAvatar.style.display = '';
-                setDmSubtitle(id);
+                if (id === myUserId) { subtitle.textContent = 'Messages to yourself — only you can see these'; subtitle.classList.remove('online', 'away'); }
+                else setDmSubtitle(id);
                 headerActions.innerHTML = '';
             } else {
                 applyGroupHeaderPhoto(id, name); subtitle.textContent = ''; subtitle.classList.remove('online');
@@ -2062,7 +2074,7 @@
             }
 
             document.getElementById('chat-box').innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
-            ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'praise-btn', 'deliver-btn', 'schedule-btn'].forEach(bid => document.getElementById(bid).disabled = false);
+            ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'mic-btn', 'plus-btn'].forEach(bid => document.getElementById(bid).disabled = false);
             document.getElementById('menu-wrap').style.display = '';
             document.getElementById('chat-menu').style.display = 'none';
             document.getElementById('emoji-picker').style.display = 'none';
@@ -2199,18 +2211,20 @@
             updateSeenIndicator();
         });
 
-        /* ---------- delivery priority (Important / Urgent) ---------- */
+        /* ---------- composer "more" menu + delivery priority ---------- */
         let pendingPriority = 'normal';
-        function toggleDeliveryMenu() {
-            const m = document.getElementById('delivery-menu');
+        function toggleComposerMenu() {
+            const m = document.getElementById('composer-menu');
             m.style.display = m.style.display === 'block' ? 'none' : 'block';
         }
-        function hideDeliveryMenu() { document.getElementById('delivery-menu').style.display = 'none'; }
+        function hideComposerMenu() { document.getElementById('composer-menu').style.display = 'none'; }
+        function cmDo(fn) { hideComposerMenu(); fn(); }   // run a menu action, then close the menu
         function setPriority(p) {
             pendingPriority = (p === 'important' || p === 'urgent') ? p : 'normal';
             const chip = document.getElementById('priority-chip');
-            const btn = document.getElementById('deliver-btn');
+            const btn = document.getElementById('plus-btn');
             btn.classList.remove('armed-important', 'armed-urgent');
+            document.getElementById('cm-clear-prio').style.display = pendingPriority === 'normal' ? 'none' : 'flex';
             if (pendingPriority === 'normal') {
                 chip.style.display = 'none';
             } else {
@@ -2221,8 +2235,14 @@
                     : '❗ Important — flagged for attention';
                 btn.classList.add('armed-' + pendingPriority);
             }
-            hideDeliveryMenu();
+            hideComposerMenu();
         }
+        // Close the "more" menu when clicking outside it.
+        document.addEventListener('click', function(e) {
+            const menu = document.getElementById('composer-menu');
+            if (menu.style.display === 'block' && !menu.contains(e.target) && e.target.id !== 'plus-btn')
+                hideComposerMenu();
+        });
 
         /* ---------- urgent re-ping: notify until the recipient reads it ---------- */
         const urgentPending = new Map();              // msg_id -> { timer, chatKey }
@@ -2271,7 +2291,7 @@
         function selectPraiseBadge(k) { praiseBadgeSel = k; renderPraiseBadges(); }
         function openPraise() {
             if (!currentChatId) return;
-            hideDeliveryMenu(); hideSlashBox();
+            hideComposerMenu(); hideSlashBox();
             praiseBadgeSel = null;
             document.getElementById('praise-note').value = '';
             const row = document.getElementById('praise-recipient-row');
