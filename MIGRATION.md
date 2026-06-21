@@ -108,7 +108,7 @@ docker compose exec -T db pg_dump -U chat -Fc chat > backup_$(date +%F).dump
 - **HTTPS is required** for web push and the PWA; Caddy handles it automatically once
   DNS points at the droplet.
 - **Firewall**: if you enable `ufw`, allow `OpenSSH`, `80`, and `443`.
-- **psql version**: the restore runs inside the `postgres:16` container, so client and
+- **psql version**: the restore runs inside the `postgres:17` container, so client and
   server versions always match regardless of your laptop's setup.
 - This repo still has the Heroku `Procfile`; it's harmless and lets you keep Heroku as a
   fallback until you delete the app.
