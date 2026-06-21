@@ -141,6 +141,50 @@
         .bubble .text pre.code-block code { background: none; padding: 0; }
         .message-row.mine .bubble .text code.inline-code { background: rgba(255,255,255,.22); }
         .message-row.mine .bubble .text pre.code-block { background: rgba(255,255,255,.15); border-color: rgba(255,255,255,.25); }
+
+        /* --- delivery priority (Important / Urgent) --- */
+        .priority-banner { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 800;
+            padding: 2px 8px; border-radius: 6px; margin-bottom: 4px; letter-spacing: .02em; }
+        .priority-banner.important { background: rgba(234,179,8,.18); color: #a16207; }
+        .priority-banner.urgent { background: rgba(239,68,68,.16); color: var(--danger); }
+        .message-row.prio-important .bubble { border: 1.5px solid rgba(234,179,8,.55); }
+        .message-row.prio-urgent .bubble { border: 1.5px solid var(--danger); }
+        #priority-chip { display: none; align-items: center; gap: 8px; padding: 7px 12px; margin-bottom: 8px;
+            border-radius: 10px; font-size: 12.5px; font-weight: 700; }
+        #priority-chip.important { background: rgba(234,179,8,.16); color: #a16207; }
+        #priority-chip.urgent { background: rgba(239,68,68,.14); color: var(--danger); }
+        #priority-chip .pc-x { margin-left: auto; cursor: pointer; background: none; border: none; font-size: 17px; color: inherit; }
+        #delivery-menu { position: absolute; bottom: 76px; right: 18px; min-width: 210px; background: var(--panel);
+            border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); display: none; z-index: 60; overflow: hidden; }
+        #delivery-menu .dm-opt { display: flex; flex-direction: column; gap: 1px; padding: 9px 13px; cursor: pointer; }
+        #delivery-menu .dm-opt:hover { background: var(--accent-soft); }
+        #delivery-menu .dm-opt b { font-size: 13.5px; }
+        #delivery-menu .dm-opt small { color: var(--text-soft); font-size: 11px; }
+        .compose-btn.armed-important { color: #a16207; }
+        .compose-btn.armed-urgent { color: var(--danger); }
+
+        /* --- praise / kudos --- */
+        .praise-card { background: linear-gradient(135deg, var(--accent-soft), transparent); border: 1px solid var(--accent);
+            border-radius: 14px; padding: 12px 14px; max-width: 340px; }
+        .praise-card .pc-head { display: flex; align-items: center; gap: 10px; }
+        .praise-card .pc-badge { font-size: 26px; line-height: 1; }
+        .praise-card .pc-label { font-weight: 800; color: var(--accent); font-size: 14px; }
+        .praise-card .pc-people { font-size: 12.5px; color: var(--text-soft); margin-top: 1px; }
+        .praise-card .pc-note { margin-top: 7px; font-size: 14px; line-height: 1.4; }
+        #praise-badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+        .praise-badge-opt { border: 1px solid var(--border); border-radius: 10px; padding: 10px 6px; text-align: center; cursor: pointer; }
+        .praise-badge-opt.sel { border-color: var(--accent); background: var(--accent-soft); }
+        .praise-badge-opt .pb-emoji { font-size: 22px; }
+        .praise-badge-opt .pb-label { font-size: 11.5px; font-weight: 600; margin-top: 3px; }
+
+        /* --- slash commands --- */
+        #slash-box { position: absolute; bottom: 76px; left: 18px; right: 18px; max-width: 380px;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+            overflow: hidden; display: none; z-index: 50; }
+        .slash-opt { padding: 9px 14px; display: flex; align-items: baseline; gap: 10px; cursor: pointer; font-size: 14px; }
+        .slash-opt.active, .slash-opt:hover { background: var(--accent-soft); }
+        .slash-opt .slash-cmd { font-weight: 800; color: var(--accent); }
+        .slash-opt .slash-desc { color: var(--text-soft); font-size: 12px; }
         .bubble.emoji-bubble { background: transparent !important; box-shadow: none; padding: 2px 0; }
         .bubble.emoji-bubble .time { float: none; display: block; margin: 2px 0 0; color: var(--text-soft); }
         .message-row.mine .bubble.emoji-bubble .time { color: var(--text-soft); text-align: right; }
@@ -488,6 +532,12 @@
 
         <div class="input-area">
             <div id="mention-box"></div>
+            <div id="slash-box"></div>
+            <div id="delivery-menu">
+                <div class="dm-opt" onclick="setPriority('normal')"><b>Standard</b><small>Normal delivery</small></div>
+                <div class="dm-opt" onclick="setPriority('important')"><b>❗ Important</b><small>Flags the message as important</small></div>
+                <div class="dm-opt" onclick="setPriority('urgent')"><b>‼️ Urgent</b><small>Re-notifies the recipient until read</small></div>
+            </div>
             <div id="emoji-picker"></div>
             <div id="attachment-preview">
                 <span id="ap-thumb"></span>
@@ -501,12 +551,15 @@
                 </div>
                 <button class="cc-close" onclick="clearComposerContext()">&times;</button>
             </div>
+            <div id="priority-chip"><span id="pc-text"></span><button class="pc-x" onclick="setPriority('normal')" title="Remove priority">&times;</button></div>
             <div class="input-controls">
                 <button id="attach-btn" class="compose-btn" onclick="document.getElementById('chat-file-input').click();" disabled>&#128206;</button>
                 <input type="file" id="chat-file-input" onchange="handleFiles(this.files)">
                 <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled>&#128512;</button>
                 <button id="gif-btn" class="compose-btn" onclick="openGifPicker()" disabled title="Send a GIF" style="font-size:12px;font-weight:800;">GIF</button>
                 <button id="mic-btn" class="compose-btn" onclick="toggleRecording()" disabled title="Record voice message">&#127908;</button>
+                <button id="praise-btn" class="compose-btn" onclick="openPraise()" disabled title="Give praise">&#128079;</button>
+                <button id="deliver-btn" class="compose-btn" onclick="toggleDeliveryMenu()" disabled title="Delivery options" style="font-weight:800;">!</button>
                 <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
                 <button id="schedule-btn" class="compose-btn" onclick="openSchedule()" disabled title="Schedule message">&#128340;</button>
                 <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
@@ -652,6 +705,18 @@
             <h3>Forward to...</h3>
             <div id="forward-list"></div>
             <button type="button" class="modal-btn ghost" style="width:100%; margin-top:12px;" onclick="document.getElementById('forwardModal').style.display='none'">Cancel</button>
+        </div>
+    </div>
+
+    <div id="praiseModal" class="modal">
+        <div class="modal-content">
+            <h3>&#128079; Give praise</h3>
+            <div id="praise-recipient-row" style="font-size:13px; color:var(--text-soft); margin-bottom:6px;"></div>
+            <div id="praise-badges"></div>
+            <textarea id="praise-note" placeholder="Add a note (optional)" rows="2"
+                style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:10px; resize:vertical; font-family:inherit; font-size:14px; background:var(--bg); color:var(--text);"></textarea>
+            <button type="button" class="modal-btn primary" style="width:100%; margin-top:12px;" onclick="sendPraise()">Send praise</button>
+            <button type="button" class="modal-btn ghost" style="width:100%; margin-top:8px;" onclick="document.getElementById('praiseModal').style.display='none'">Cancel</button>
         </div>
     </div>
 
@@ -915,7 +980,10 @@
 
             const showSender = !mine && currentChatType === 'group';
             const senderHtml = showSender ? `<div class="sender">${escapeHtml(msg.sender || msg.username)}</div>` : '';
-            const ec = (text && !msg.file_url && !msg.reply_to && !msg.forwarded) ? emojiOnlyCount(text) : 0;
+            const prio = (msg.priority && msg.priority !== 'normal') ? msg.priority : '';
+            if (prio) row.classList.add('prio-' + prio);
+            const prioBanner = prio ? `<div class="priority-banner ${prio}">${prio === 'urgent' ? '‼️ URGENT' : '❗ IMPORTANT'}</div>` : '';
+            const ec = (text && !msg.file_url && !msg.reply_to && !msg.forwarded && !prio) ? emojiOnlyCount(text) : 0;
             const emjCls = ec ? ` emoji-only ${ec <= 1 ? 'emj1' : (ec <= 3 ? 'emj2' : 'emj3')}` : '';
             const textHtml = text ? `<div class="text${emjCls}">${ec ? escapeHtml(text) : formatRich(text)}</div>` : '';
             const fileHtml = buildFileHtml(msg.file_url, msg.file_type, msg.file_name);
@@ -938,11 +1006,34 @@
                               <button title="Delete" onclick="deleteMessage(${msg.msg_id})">🗑</button>` : ''}
                 </div>`;
 
+            if (msg.praise) {
+                const p = msg.praise;
+                const giver = escapeHtml(msg.sender || msg.username || 'Someone');
+                const toName = escapeHtml(p.to_name || 'someone');
+                const noteHtml = text ? `<div class="pc-note">${formatRich(text)}</div>` : '';
+                const card = `<div class="praise-card">
+                        <div class="pc-head"><span class="pc-badge">${p.emoji}</span>
+                            <div><div class="pc-label">${escapeHtml(p.label)}</div>
+                            <div class="pc-people">${giver} &rarr; ${toName}</div></div></div>
+                        ${noteHtml}
+                        <span class="time">${formatAmmanTime(msg.ts_iso) || msg.timestamp || ''}</span></div>`;
+                // Praise has no editable text body, so omit Edit (would break message_edited).
+                const praiseActions = `
+                    <div class="msg-actions">
+                        <button title="React" onclick="openReactPalette(${msg.msg_id}, this)">😀</button>
+                        <button title="Reply" onclick="startReply(${msg.msg_id})">↩</button>
+                        ${mine ? `<button title="Delete" onclick="deleteMessage(${msg.msg_id})">🗑</button>` : ''}
+                    </div>`;
+                row.innerHTML = `${avatar}<div class="msg-col">${card}<div class="reactions"></div></div>${praiseActions}`;
+                renderReactions(row, msg.reactions || []);
+                return row;
+            }
+
             row.innerHTML = `
                 ${avatar}
                 <div class="msg-col">
                     ${replyHtml}
-                    <div class="bubble${ec ? ' emoji-bubble' : ''}">${fwdTag}${senderHtml}${textHtml}${fileHtml}${previewHtml}<span class="time">${formatAmmanTime(msg.ts_iso) || msg.timestamp || ''}${editedTag}</span></div>
+                    <div class="bubble${ec ? ' emoji-bubble' : ''}">${prioBanner}${fwdTag}${senderHtml}${textHtml}${fileHtml}${previewHtml}<span class="time">${formatAmmanTime(msg.ts_iso) || msg.timestamp || ''}${editedTag}</span></div>
                     <div class="reactions"></div>
                 </div>
                 ${actions}`;
@@ -1356,7 +1447,7 @@
                 document.getElementById('chat-title').textContent = 'Select a chat to begin';
                 document.getElementById('chat-subtitle').textContent = '';
                 document.getElementById('menu-wrap').style.display = 'none';
-                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
+                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'praise-btn', 'deliver-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
             }
             showToast('User deleted', `${data.username} was removed.`);
             if (document.getElementById('adminDashModal').style.display === 'block') socket.emit('get_admin_dashboard');
@@ -1931,7 +2022,7 @@
                 document.getElementById('chat-subtitle').textContent = '';
                 document.getElementById('header-actions').innerHTML = '';
                 document.getElementById('menu-wrap').style.display = 'none';
-                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
+                ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'praise-btn', 'deliver-btn', 'schedule-btn'].forEach(b => document.getElementById(b).disabled = true);
             }
             showToast('Group deleted', 'The group was removed.');
         });
@@ -1945,6 +2036,7 @@
             document.getElementById('pinned-banner').style.display = 'none';
             document.getElementById('new-msg-pill').style.display = 'none';
             clearComposerContext(); clearPendingAttachment(); hideMentionBox();
+            setPriority('normal'); hideSlashBox(); hideDeliveryMenu();
 
             document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
             const activeItem = document.getElementById('nav-' + type + '-' + id);
@@ -1970,7 +2062,7 @@
             }
 
             document.getElementById('chat-box').innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
-            ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'schedule-btn'].forEach(bid => document.getElementById(bid).disabled = false);
+            ['message-input', 'send-btn', 'attach-btn', 'emoji-btn', 'gif-btn', 'mic-btn', 'praise-btn', 'deliver-btn', 'schedule-btn'].forEach(bid => document.getElementById(bid).disabled = false);
             document.getElementById('menu-wrap').style.display = '';
             document.getElementById('chat-menu').style.display = 'none';
             document.getElementById('emoji-picker').style.display = 'none';
@@ -2003,7 +2095,7 @@
             if (dividerEl) dividerEl.scrollIntoView({ block: 'center' });
             else chatBox.scrollTop = chatBox.scrollHeight;
             updateSeenIndicator();
-            socket.emit('mark_read', { type: currentChatType, id: currentChatId });
+            markRead(currentChatType, currentChatId);
         });
 
         socket.on('older_history', function(payload) {
@@ -2068,7 +2160,8 @@
                     msg_id: data.msg_id, sender: data.username, sender_id: data.sender_id, content: data.message,
                     file_url: data.file_url, file_type: data.file_type, file_name: data.file_name,
                     timestamp: data.timestamp, ts_iso: data.ts_iso, reply_to: data.reply_to, reactions: data.reactions || [],
-                    edited: data.edited, forwarded: data.forwarded, preview: data.preview, pinned: data.pinned
+                    edited: data.edited, forwarded: data.forwarded, preview: data.preview, pinned: data.pinned,
+                    priority: data.priority, praise: data.praise
                 });
                 document.getElementById('typing-indicator').style.display = 'none';
                 updateSeenIndicator();
@@ -2082,7 +2175,7 @@
                         playNotif(mentionsMe);
                         browserNotify(mentionsMe ? `${data.username} mentioned you` : data.username, data.message || 'Sent an attachment');
                     }
-                    socket.emit('mark_read', { type: currentChatType, id: currentChatId });
+                    markRead(currentChatType, currentChatId);
                 }
             } else if (data.sender_id !== myUserId) {
                 const muteKey = data.type === 'dm' ? `dm:${data.sender_id}` : `group:${data.group_id}`;
@@ -2090,6 +2183,7 @@
                 const preview = data.file_name ? `Sent an attachment: ${data.file_name}` : data.message;
                 if (!muted && mentionsMe) { showToast(`${data.username} mentioned you in #${data.group_name}`, preview, true); playNotif(true); browserNotify(`${data.username} mentioned you`, preview); }
                 else if (!muted) { const title = data.type === 'dm' ? `Message from ${data.username}` : `New in #${data.group_name}`; showToast(title, preview, false); playNotif(false); browserNotify(title, preview); }
+                if (!muted && data.priority === 'urgent') queueUrgent(data, preview);
                 const targetId = data.type === 'dm' ? data.sender_id : data.group_id;
                 const badge = document.getElementById('badge-' + data.type + '-' + targetId);
                 if (badge) { badge.textContent = (parseInt(badge.textContent) || 0) + 1; badge.style.display = 'inline-block'; }
@@ -2104,6 +2198,139 @@
             seenState[data.reader_id] = { name: data.reader_name, last_read_id: data.last_read_id };
             updateSeenIndicator();
         });
+
+        /* ---------- delivery priority (Important / Urgent) ---------- */
+        let pendingPriority = 'normal';
+        function toggleDeliveryMenu() {
+            const m = document.getElementById('delivery-menu');
+            m.style.display = m.style.display === 'block' ? 'none' : 'block';
+        }
+        function hideDeliveryMenu() { document.getElementById('delivery-menu').style.display = 'none'; }
+        function setPriority(p) {
+            pendingPriority = (p === 'important' || p === 'urgent') ? p : 'normal';
+            const chip = document.getElementById('priority-chip');
+            const btn = document.getElementById('deliver-btn');
+            btn.classList.remove('armed-important', 'armed-urgent');
+            if (pendingPriority === 'normal') {
+                chip.style.display = 'none';
+            } else {
+                chip.className = pendingPriority;   // keeps #priority-chip id; adds important/urgent class
+                chip.style.display = 'flex';
+                document.getElementById('pc-text').textContent = pendingPriority === 'urgent'
+                    ? '‼️ Urgent — recipient is re-notified until they read it'
+                    : '❗ Important — flagged for attention';
+                btn.classList.add('armed-' + pendingPriority);
+            }
+            hideDeliveryMenu();
+        }
+
+        /* ---------- urgent re-ping: notify until the recipient reads it ---------- */
+        const urgentPending = new Map();              // msg_id -> { timer, chatKey }
+        const URGENT_INTERVAL = 120000, URGENT_MAX = 5;
+        function chatKeyOf(type, id) { return type + ':' + id; }
+        function queueUrgent(data, preview) {
+            if (data.sender_id === myUserId || urgentPending.has(data.msg_id)) return;
+            const chatKey = data.type === 'dm' ? ('dm:' + data.sender_id) : ('group:' + data.group_id);
+            let count = 0;
+            const timer = setInterval(() => {
+                count++;
+                playNotif(true);
+                browserNotify('‼️ Urgent from ' + data.username, preview || 'Urgent message');
+                showToast('‼️ Urgent from ' + data.username, preview || '', true);
+                if (count >= URGENT_MAX) { clearInterval(timer); urgentPending.delete(data.msg_id); }
+            }, URGENT_INTERVAL);
+            urgentPending.set(data.msg_id, { timer, chatKey });
+        }
+        function clearUrgentForChat(type, id) {
+            const chatKey = chatKeyOf(type, id);
+            for (const [mid, info] of urgentPending) {
+                if (info.chatKey === chatKey) { clearInterval(info.timer); urgentPending.delete(mid); }
+            }
+        }
+        // Marks a chat read AND cancels any pending urgent re-pings for it.
+        function markRead(type, id) {
+            socket.emit('mark_read', { type, id });
+            clearUrgentForChat(type, id);
+        }
+
+        /* ---------- praise / kudos ---------- */
+        const PRAISE_BADGES = [
+            { key: 'thanks', emoji: '🙌', label: 'Thank You' },
+            { key: 'awesome', emoji: '⭐', label: 'Awesome' },
+            { key: 'teamwork', emoji: '🤝', label: 'Great Teamwork' },
+            { key: 'leader', emoji: '🏆', label: 'Leadership' },
+            { key: 'kind', emoji: '❤️', label: 'Kind Heart' },
+            { key: 'idea', emoji: '💡', label: 'Big Idea' },
+        ];
+        let praiseBadgeSel = null;
+        function renderPraiseBadges() {
+            document.getElementById('praise-badges').innerHTML = PRAISE_BADGES.map(b =>
+                `<div class="praise-badge-opt${praiseBadgeSel === b.key ? ' sel' : ''}" onclick="selectPraiseBadge('${b.key}')">
+                    <div class="pb-emoji">${b.emoji}</div><div class="pb-label">${b.label}</div></div>`).join('');
+        }
+        function selectPraiseBadge(k) { praiseBadgeSel = k; renderPraiseBadges(); }
+        function openPraise() {
+            if (!currentChatId) return;
+            hideDeliveryMenu(); hideSlashBox();
+            praiseBadgeSel = null;
+            document.getElementById('praise-note').value = '';
+            const row = document.getElementById('praise-recipient-row');
+            if (currentChatType === 'dm') {
+                row.innerHTML = 'Praising <b>' + escapeHtml(userNames[currentChatId] || 'this person') + '</b>';
+            } else {
+                const opts = groupMembers.filter(m => m.id !== myUserId)
+                    .map(m => `<option value="${m.id}">${escapeHtml(m.username)}</option>`).join('');
+                row.innerHTML = 'Praise: <select id="praise-target" style="padding:6px 8px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text);">' + opts + '</select>';
+            }
+            renderPraiseBadges();
+            document.getElementById('praiseModal').style.display = 'block';
+        }
+        function sendPraise() {
+            if (!currentChatId || !praiseBadgeSel) { if (!praiseBadgeSel) alert('Pick a badge first.'); return; }
+            let toId = currentChatType === 'dm' ? currentChatId : parseInt((document.getElementById('praise-target') || {}).value || 0);
+            if (currentChatType === 'group' && !toId) { alert('Pick who to praise.'); return; }
+            const note = document.getElementById('praise-note').value.trim();
+            socket.emit('send_praise', { type: currentChatType, id: currentChatId, badge: praiseBadgeSel, to_id: toId, note });
+            document.getElementById('praiseModal').style.display = 'none';
+        }
+
+        /* ---------- slash commands ---------- */
+        const SLASH_COMMANDS = [
+            { cmd: 'important', desc: 'Mark your next message Important', run: () => setPriority('important') },
+            { cmd: 'urgent', desc: 'Mark Urgent — re-notifies until read', run: () => setPriority('urgent') },
+            { cmd: 'praise', desc: 'Give praise / kudos', run: () => openPraise() },
+            { cmd: 'shrug', desc: 'Append ¯\\_(ツ)_/¯', run: () => { document.getElementById('message-input').value = '¯\\_(ツ)_/¯'; } },
+            { cmd: 'gif', desc: 'Search for a GIF', run: () => openGifPicker() },
+        ];
+        const slashBox = document.getElementById('slash-box');
+        let slashActive = -1, slashMatches = [];
+        function hideSlashBox() { slashBox.style.display = 'none'; slashActive = -1; slashMatches = []; }
+        function currentSlashTerm() {
+            const m = document.getElementById('message-input').value.match(/^\/(\w*)$/);
+            return m ? m[1].toLowerCase() : null;
+        }
+        function renderSlashBox() {
+            if (!slashMatches.length) { hideSlashBox(); return; }
+            slashBox.innerHTML = slashMatches.map((c, i) =>
+                `<div class="slash-opt ${i === slashActive ? 'active' : ''}" data-i="${i}"><span class="slash-cmd">/${c.cmd}</span><span class="slash-desc">${c.desc}</span></div>`).join('');
+            slashBox.querySelectorAll('.slash-opt').forEach(opt => { opt.onclick = () => pickSlash(parseInt(opt.dataset.i)); });
+            slashBox.style.display = 'block';
+        }
+        function updateSlashBox() {
+            if (!currentChatType) { hideSlashBox(); return; }
+            const term = currentSlashTerm();
+            if (term === null) { hideSlashBox(); return; }
+            slashMatches = SLASH_COMMANDS.filter(c => c.cmd.startsWith(term));
+            slashActive = slashMatches.length ? 0 : -1;
+            renderSlashBox();
+        }
+        function pickSlash(i) {
+            const cmd = slashMatches[i]; if (!cmd) return;
+            document.getElementById('message-input').value = '';
+            hideSlashBox();
+            cmd.run();
+            document.getElementById('message-input').focus();
+        }
 
         /* ---------- sending ---------- */
         function sendMessage() {
@@ -2128,11 +2355,14 @@
             }
             // accompanying text (also acts as the message / caption)
             if (text.trim() !== '') {
-                socket.emit('send_message', { type: currentChatType, id: currentChatId, message: text, reply_to_id: replyTo ? replyTo.msg_id : null });
+                socket.emit('send_message', { type: currentChatType, id: currentChatId, message: text,
+                    reply_to_id: replyTo ? replyTo.msg_id : null, priority: pendingPriority });
             }
             clearComposerContext();
+            setPriority('normal');
             input.value = '';
             hideMentionBox();
+            hideSlashBox();
             document.getElementById('typing-indicator').style.display = 'none';
         }
 
@@ -2276,6 +2506,7 @@
         messageInput.addEventListener("input", function() {
             if (currentChatId) socket.emit('typing', { type: currentChatType, id: currentChatId });
             updateMentionBox();
+            updateSlashBox();
         });
         messageInput.addEventListener("keydown", function(event) {
             if (mentionBox.style.display === 'block' && mentionMatches.length) {
@@ -2283,6 +2514,12 @@
                 if (event.key === "ArrowUp") { event.preventDefault(); mentionActive = (mentionActive - 1 + mentionMatches.length) % mentionMatches.length; renderMentionBox(); return; }
                 if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pickMention(mentionActive); return; }
                 if (event.key === "Escape") { hideMentionBox(); return; }
+            }
+            if (slashBox.style.display === 'block' && slashMatches.length) {
+                if (event.key === "ArrowDown") { event.preventDefault(); slashActive = (slashActive + 1) % slashMatches.length; renderSlashBox(); return; }
+                if (event.key === "ArrowUp") { event.preventDefault(); slashActive = (slashActive - 1 + slashMatches.length) % slashMatches.length; renderSlashBox(); return; }
+                if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); pickSlash(slashActive); return; }
+                if (event.key === "Escape") { hideSlashBox(); return; }
             }
             if (event.key === "Escape" && (replyTo || editingMessageId)) { clearComposerContext(); return; }
             if (event.key === "Enter") { event.preventDefault(); sendMessage(); }

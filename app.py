@@ -197,6 +197,11 @@ class Message(db.Model):
     pinned = db.Column(db.Boolean, default=False)
     forwarded = db.Column(db.Boolean, default=False)
     is_system = db.Column(db.Boolean, default=False)
+    # Delivery priority: 'normal' | 'important' | 'urgent' (Teams-style).
+    priority = db.Column(db.String(12), default='normal')
+    # Praise / Kudos: badge key + who is being praised (None for ordinary messages).
+    praise_badge = db.Column(db.String(24), nullable=True)
+    praise_to_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
 
 # Tracks which user has read which message (powers "Seen" / unread counts).
 class MessageRead(db.Model):
@@ -318,6 +323,12 @@ def safe_auto_migrate():
             to_add.append("ALTER TABLE message ADD COLUMN forwarded BOOLEAN DEFAULT FALSE")
         if 'is_system' not in cols:
             to_add.append("ALTER TABLE message ADD COLUMN is_system BOOLEAN DEFAULT FALSE")
+        if 'priority' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN priority VARCHAR(12) DEFAULT 'normal'")
+        if 'praise_badge' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN praise_badge VARCHAR(24)")
+        if 'praise_to_id' not in cols:
+            to_add.append("ALTER TABLE message ADD COLUMN praise_to_id INTEGER")
         try:
             gcols = {c['name'] for c in insp.get_columns('chat_group')}
             if 'photo' not in gcols:
@@ -372,6 +383,31 @@ def base_chat_query(chat_type, chat_id, me_id):
         q = Message.query.filter_by(group_id=chat_id)
     return q.order_by(Message.id)
 
+# Praise / Kudos badge catalog. Keys are stored on the message; the rest is display.
+PRAISE_BADGES = {
+    'thanks':   {'emoji': '🙌', 'label': 'Thank You'},
+    'awesome':  {'emoji': '⭐', 'label': 'Awesome'},
+    'teamwork': {'emoji': '🤝', 'label': 'Great Teamwork'},
+    'leader':   {'emoji': '🏆', 'label': 'Leadership'},
+    'kind':     {'emoji': '❤️', 'label': 'Kind Heart'},
+    'idea':     {'emoji': '💡', 'label': 'Big Idea'},
+}
+PRIORITIES = ('normal', 'important', 'urgent')
+
+def norm_priority(p):
+    return p if p in PRIORITIES else 'normal'
+
+def praise_info(m):
+    """Render-ready praise payload for a message, or None if it isn't praise."""
+    if not getattr(m, 'praise_badge', None):
+        return None
+    badge = PRAISE_BADGES.get(m.praise_badge)
+    if not badge:
+        return None
+    to = User.query.get(m.praise_to_id) if m.praise_to_id else None
+    return {'key': m.praise_badge, 'emoji': badge['emoji'], 'label': badge['label'],
+            'to_id': m.praise_to_id, 'to_name': to.username if to else None}
+
 def get_reactions(message_id):
     """Return [{'emoji': '👍', 'user_ids': [..]}] for a message."""
     rows = MessageReaction.query.filter_by(message_id=message_id).all()
@@ -415,6 +451,8 @@ def serialize_message(m):
         'pinned': bool(m.pinned),
         'forwarded': bool(m.forwarded),
         'is_system': bool(m.is_system),
+        'priority': norm_priority(m.priority),
+        'praise': praise_info(m),
         'preview': None if m.is_deleted else get_content_preview(m.content),
     }
 
@@ -435,6 +473,7 @@ def serialize_messages(msgs):
     reply_msgs = {rm.id: rm for rm in Message.query.filter(Message.id.in_(reply_ids)).all()} if reply_ids else {}
     for rm in reply_msgs.values():
         sender_ids.add(rm.sender_id)
+    sender_ids |= {m.praise_to_id for m in msgs if m.praise_to_id}
 
     umap = {u.id: u for u in User.query.filter(User.id.in_(sender_ids)).all()} if sender_ids else {}
 
@@ -465,6 +504,12 @@ def serialize_messages(msgs):
             rp = {'msg_id': rt.id, 'sender': rts.username if rts else '?', 'snippet': snip}
         reactions = [{'emoji': e, 'user_ids': uids} for e, uids in react_map.get(m.id, {}).items()]
         preview = serialize_preview(lp_map.get(url_map.get(m.id))) if (not m.is_deleted and m.id in url_map) else None
+        praise = None
+        if m.praise_badge and m.praise_badge in PRAISE_BADGES:
+            b = PRAISE_BADGES[m.praise_badge]
+            pto = umap.get(m.praise_to_id)
+            praise = {'key': m.praise_badge, 'emoji': b['emoji'], 'label': b['label'],
+                      'to_id': m.praise_to_id, 'to_name': pto.username if pto else None}
         out.append({
             'msg_id': m.id,
             'sender': sender.username if sender else '?',
@@ -482,6 +527,8 @@ def serialize_messages(msgs):
             'pinned': bool(m.pinned),
             'forwarded': bool(m.forwarded),
             'is_system': bool(m.is_system),
+            'priority': norm_priority(m.priority),
+            'praise': praise,
             'preview': preview,
         })
     return out
@@ -1381,15 +1428,16 @@ def handle_message(data):
     chat_type, chat_id, content = data['type'], int(data['id']), data['message']
     reply_to_id = data.get('reply_to_id')
     reply_to_id = int(reply_to_id) if reply_to_id else None
+    priority = norm_priority(data.get('priority'))
 
     if chat_type == 'dm' and is_blocked_between(current_user.id, chat_id):
         return
 
     if chat_type == 'dm':
-        new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content=content, reply_to_id=reply_to_id)
+        new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content=content, reply_to_id=reply_to_id, priority=priority)
         room = dm_room(current_user.id, chat_id)
     else:
-        new_msg = Message(sender_id=current_user.id, group_id=chat_id, content=content, reply_to_id=reply_to_id)
+        new_msg = Message(sender_id=current_user.id, group_id=chat_id, content=content, reply_to_id=reply_to_id, priority=priority)
         room = f"group_{chat_id}"
 
     db.session.add(new_msg)
@@ -1404,7 +1452,8 @@ def handle_message(data):
         'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
         'ts_iso': iso_utc(new_msg.timestamp), 'mentions': mentions,
         'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
-        'pinned': False, 'forwarded': False, 'preview': None
+        'pinned': False, 'forwarded': False, 'preview': None,
+        'priority': priority, 'praise': None
     }
 
     if chat_type == 'dm':
@@ -1423,6 +1472,60 @@ def handle_message(data):
 
     # Fetch a link preview in the background and push it to the room when ready.
     maybe_fetch_preview(content, room, new_msg.id)
+
+@socketio.on('send_praise')
+def handle_praise(data):
+    chat_type, chat_id = data['type'], int(data['id'])
+    badge = data.get('badge')
+    if badge not in PRAISE_BADGES:
+        return
+    note = (data.get('note') or '').strip()[:500]
+    to_id = data.get('to_id')
+    to_id = int(to_id) if to_id else None
+
+    if chat_type == 'dm':
+        if is_blocked_between(current_user.id, chat_id):
+            return
+        to_id = chat_id  # in a DM the praised person is always the other party
+        new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content=note,
+                          praise_badge=badge, praise_to_id=to_id)
+        room = dm_room(current_user.id, chat_id)
+    else:
+        group = ChatGroup.query.get(chat_id)
+        if not group or to_id not in {u.id for u in group.members}:
+            return
+        new_msg = Message(sender_id=current_user.id, group_id=chat_id, content=note,
+                          praise_badge=badge, praise_to_id=to_id)
+        room = f"group_{chat_id}"
+
+    db.session.add(new_msg)
+    db.session.commit()
+
+    pr = praise_info(new_msg)
+    msg_packet = {
+        'msg_id': new_msg.id, 'username': current_user.username, 'message': note,
+        'file_url': None, 'file_type': None, 'file_name': None,
+        'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
+        'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
+        'ts_iso': iso_utc(new_msg.timestamp), 'mentions': [to_id] if to_id else [],
+        'reply_to': None, 'reactions': [], 'edited': False,
+        'pinned': False, 'forwarded': False, 'preview': None,
+        'priority': 'normal', 'praise': pr
+    }
+
+    if chat_type == 'dm':
+        emit('receive_message', msg_packet, to=f"user_sys_{chat_id}")
+        push_to_offline_recipients([chat_id], current_user.username,
+                                   f"praised you — {pr['label']}", 'dm', current_user.id)
+    else:
+        msg_packet['group_name'] = group.name
+        for user in group.members:
+            if user.id != current_user.id:
+                emit('receive_message', msg_packet, to=f"user_sys_{user.id}")
+        push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
+                                   f"{current_user.username} praised {pr['to_name']}", 'group', chat_id)
+
+    emit('receive_message', msg_packet, to=room)
 
 def _is_allowed_gif(url):
     try:
