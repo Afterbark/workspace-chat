@@ -174,6 +174,11 @@ class User(UserMixin, db.Model):
     approved = db.Column(db.Boolean, default=True)
     groups = db.relationship('ChatGroup', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
     admin_groups = db.relationship('ChatGroup', secondary=group_admins, backref=db.backref('admins', lazy='dynamic'))
+    # Presence: manual availability override (None = auto active/away) + custom status message.
+    manual_presence = db.Column(db.String(12), nullable=True)   # None | 'busy' | 'dnd' | 'away'
+    status_emoji = db.Column(db.String(16), nullable=True)
+    status_text = db.Column(db.String(140), nullable=True)
+    status_expires = db.Column(db.DateTime, nullable=True)
 
 class ChatGroup(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -343,6 +348,14 @@ def safe_auto_migrate():
                 to_add.append('ALTER TABLE "user" ADD COLUMN last_seen TIMESTAMP')
             if 'approved' not in ucols:
                 to_add.append('ALTER TABLE "user" ADD COLUMN approved BOOLEAN DEFAULT TRUE')
+            if 'manual_presence' not in ucols:
+                to_add.append('ALTER TABLE "user" ADD COLUMN manual_presence VARCHAR(12)')
+            if 'status_emoji' not in ucols:
+                to_add.append('ALTER TABLE "user" ADD COLUMN status_emoji VARCHAR(16)')
+            if 'status_text' not in ucols:
+                to_add.append('ALTER TABLE "user" ADD COLUMN status_text VARCHAR(140)')
+            if 'status_expires' not in ucols:
+                to_add.append('ALTER TABLE "user" ADD COLUMN status_expires TIMESTAMP')
         except Exception:
             pass
         # Indexes on the hot message-filter columns. create_all() adds these for
@@ -950,13 +963,19 @@ def dashboard():
     muted = [f"{m.chat_type}:{m.chat_id}" for m in MutedChat.query.filter_by(user_id=current_user.id).all()]
     archived = [f"{a.chat_type}:{a.chat_id}" for a in ArchivedChat.query.filter_by(user_id=current_user.id).all()]
     online_now = list(online_users.keys())
-    online_status = {uid: user_status.get(uid, 'active') for uid in online_now}
+    online_status = {uid: (user_dict[uid].manual_presence
+                           if (uid in user_dict and user_dict[uid].manual_presence in MANUAL_PRESENCES)
+                           else user_status.get(uid, 'active')) for uid in online_now}
     last_seen = {u.id: (iso_utc(u.last_seen) if u.last_seen else None) for u in all_users}
+    status_messages = {u.id: status_message_of(u) for u in user_dict.values()}
 
     return render_template('dashboard.html', users=all_users, groups=user_groups,
                            user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
                            vapid_public_key=VAPID_PUBLIC_KEY, muted=muted, archived=archived,
                            online_now=online_now, online_status=online_status, last_seen=last_seen, blocked_ids=list(blocked_ids),
+                           status_messages=status_messages,
+                           my_presence=(current_user.manual_presence or 'available'),
+                           my_status_message=status_message_of(current_user),
                            giphy_api_key=os.environ.get('GIPHY_API_KEY', ''),
                            is_admin=is_site_admin(current_user),
                            pending_requests=([serialize_request(r) for r in ApprovalRequest.query.order_by(ApprovalRequest.id.desc()).all()]
@@ -1184,6 +1203,25 @@ def logout():
     return redirect(url_for('login'))
 
 # --- WEBSOCKETS ---
+MANUAL_PRESENCES = ('busy', 'dnd', 'away')
+
+def status_message_of(u):
+    """Custom status {emoji, text} for a user, or None if unset/expired."""
+    if not u or not (u.status_text or u.status_emoji):
+        return None
+    if u.status_expires and u.status_expires <= datetime.now():
+        return None
+    return {'emoji': u.status_emoji or '', 'text': u.status_text or ''}
+
+def effective_status(uid):
+    """Availability shown to others: offline, the manual override, or auto active/away."""
+    if uid not in online_users:
+        return 'offline'
+    u = User.query.get(uid)
+    if u and u.manual_presence in MANUAL_PRESENCES:
+        return u.manual_presence
+    return user_status.get(uid, 'active')
+
 @socketio.on('register_user')
 def on_register_user():
     if not current_user.is_authenticated:
@@ -1193,10 +1231,13 @@ def on_register_user():
     online_users[current_user.id] = online_users.get(current_user.id, 0) + 1
     user_status[current_user.id] = 'active'
     if online_users[current_user.id] == 1:
-        socketio.emit('presence_update', {'user_id': current_user.id, 'online': True, 'status': 'active'})
+        socketio.emit('presence_update', {'user_id': current_user.id, 'online': True,
+                                          'status': effective_status(current_user.id),
+                                          'status_message': status_message_of(current_user)})
     emit('presence_state', {
         'online': list(online_users.keys()),
-        'statuses': {uid: user_status.get(uid, 'active') for uid in online_users}
+        'statuses': {uid: effective_status(uid) for uid in online_users},
+        'status_messages': {uid: status_message_of(User.query.get(uid)) for uid in online_users}
     })
 
 @socketio.on('presence_status')
@@ -1207,7 +1248,45 @@ def on_presence_status(data):
     if user_status.get(current_user.id) == status:
         return
     user_status[current_user.id] = status
+    # A manual availability (busy/dnd/away) overrides the auto idle signal — don't broadcast it.
+    u = User.query.get(current_user.id)
+    if u and u.manual_presence in MANUAL_PRESENCES:
+        return
     socketio.emit('presence_update', {'user_id': current_user.id, 'online': True, 'status': status})
+
+@socketio.on('set_presence')
+def on_set_presence(data):
+    if not current_user.is_authenticated or current_user.id not in online_users:
+        return
+    p = data.get('presence')
+    u = User.query.get(current_user.id)
+    if not u:
+        return
+    u.manual_presence = p if p in MANUAL_PRESENCES else None   # 'available' or unknown -> auto
+    db.session.commit()
+    socketio.emit('presence_update', {'user_id': current_user.id, 'online': True,
+                                      'status': effective_status(current_user.id)})
+
+@socketio.on('set_status_message')
+def on_set_status_message(data):
+    if not current_user.is_authenticated:
+        return
+    u = User.query.get(current_user.id)
+    if not u:
+        return
+    emoji = (data.get('emoji') or '').strip()[:16]
+    text = (data.get('text') or '').strip()[:140]
+    if not emoji and not text:
+        u.status_emoji = u.status_text = u.status_expires = None
+    else:
+        u.status_emoji, u.status_text = emoji or None, text or None
+        try:
+            mins = int(data.get('minutes'))
+            u.status_expires = datetime.now() + timedelta(minutes=mins) if mins > 0 else None
+        except (TypeError, ValueError):
+            u.status_expires = None
+    db.session.commit()
+    socketio.emit('status_message_update', {'user_id': current_user.id, 'status_message': status_message_of(u)})
 
 @socketio.on('disconnect')
 def on_disconnect():

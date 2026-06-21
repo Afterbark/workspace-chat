@@ -57,7 +57,7 @@
         .sidebar { width: 320px; background: var(--sidebar); display: flex; flex-direction: column;
             border-right: 1px solid var(--border); flex-shrink: 0; transition: transform .25s ease; }
         .sidebar-header { padding: 16px 18px; display: flex; align-items: center; gap: 12px;
-            border-bottom: 1px solid var(--border); background: var(--panel); }
+            border-bottom: 1px solid var(--border); background: var(--panel); position: relative; }
         .sidebar-profile-pic { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; }
         .me-name { font-weight: 600; font-size: 16px; letter-spacing: -.01em; }
         .photo-link { font-size: 12px; color: var(--accent); cursor: pointer; text-decoration: none; }
@@ -90,6 +90,35 @@
         .dot.away { background: #f59e0b; }
         .self-ic { position: absolute; bottom: -2px; right: -2px; width: 18px; height: 18px; border-radius: 50%;
             background: var(--sidebar); border: 2px solid var(--sidebar); font-size: 11px; line-height: 16px; text-align: center; }
+        .dot.busy, .dot.dnd { background: var(--danger); display: block; }
+        .dot.dnd::after { content: ''; position: absolute; left: 2px; right: 2px; top: 50%; height: 2px;
+            transform: translateY(-50%); background: #fff; border-radius: 2px; }
+        .item .status-emoji { font-size: 13px; margin-left: 3px; flex-shrink: 0; }
+
+        /* my-status control + status menu */
+        .me-status { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; font-size: 12px;
+            color: var(--text-soft); cursor: pointer; border-radius: 6px; padding: 1px 5px; margin: 1px 0 1px -5px; }
+        .me-status:hover { background: var(--bg); color: var(--text); }
+        #me-status-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .me-status-caret { font-size: 9px; opacity: .7; }
+        #status-menu { position: absolute; top: 70px; left: 16px; width: 272px; background: var(--panel);
+            border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); padding: 10px; z-index: 80; display: none; }
+        .sm-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-soft); margin: 4px 4px 6px; }
+        .sm-opt { display: flex; align-items: center; padding: 8px 10px; border-radius: var(--r-sm); cursor: pointer; font-size: 14px; transition: background .12s; }
+        .sm-opt:hover { background: var(--bg); }
+        .sm-opt.sel { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+        .dot-mini { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 10px; position: relative; }
+        .dot-mini.avail { background: var(--green); } .dot-mini.busy, .dot-mini.dnd { background: var(--danger); } .dot-mini.away { background: var(--amber); }
+        .dot-mini.dnd::after { content: ''; position: absolute; left: 2px; right: 2px; top: 50%; height: 1.5px; transform: translateY(-50%); background: #fff; }
+        .sm-sep { height: 1px; background: var(--border); margin: 8px 4px; }
+        .sm-emojis { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 2px 8px; }
+        .sm-emojis .se { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 17px; cursor: pointer; border: 1px solid transparent; }
+        .sm-emojis .se:hover { background: var(--bg); }
+        .sm-emojis .se.sel { border-color: var(--accent); background: var(--accent-soft); }
+        #sm-text { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); color: var(--text); font-size: 13px; outline: none; box-sizing: border-box; transition: border-color .15s, box-shadow .15s; }
+        #sm-text:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+        #sm-duration { width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); color: var(--text); font-size: 13px; }
+        .sm-actions { display: flex; gap: 8px; margin-top: 10px; }
         .item .group-ic { width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0; display: flex;
             align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 18px; }
         .item .name { flex: 1; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -490,15 +519,44 @@
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
             {% set my_avatar = current_user.profile_pic if current_user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + current_user.profile_pic) if current_user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + current_user.username + '&background=2563eb&color=fff') %}
-            <img src="{{ my_avatar }}" class="sidebar-profile-pic" data-uname="{{ current_user.username }}" onerror="avatarFallback(this)">
+            <span class="avatar-wrap">
+                <img src="{{ my_avatar }}" class="sidebar-profile-pic" data-uname="{{ current_user.username }}" onerror="avatarFallback(this)">
+                <span class="dot on" id="my-dot"></span>
+            </span>
             <div style="flex:1; min-width:0;">
                 <div class="me-name">{{ current_user.username }}</div>
+                <div class="me-status" id="me-status" onclick="toggleStatusMenu(event)" title="Set your status">
+                    <span id="me-status-label">Available</span><span class="me-status-caret">&#9662;</span>
+                </div>
                 <form action="/upload_profile" method="POST" enctype="multipart/form-data" id="upload-form">
                     <label class="photo-link">
                         <input type="file" name="file" style="display:none;" onchange="document.getElementById('upload-form').submit();" accept="image/*">
                         Change photo
                     </label>
                 </form>
+            </div>
+            <div id="status-menu">
+                <div class="sm-title">Availability</div>
+                <div class="sm-opt" onclick="setPresence('available')"><span class="dot-mini avail"></span>Available</div>
+                <div class="sm-opt" onclick="setPresence('busy')"><span class="dot-mini busy"></span>Busy</div>
+                <div class="sm-opt" onclick="setPresence('dnd')"><span class="dot-mini dnd"></span>Do not disturb</div>
+                <div class="sm-opt" onclick="setPresence('away')"><span class="dot-mini away"></span>Appear away</div>
+                <div class="sm-sep"></div>
+                <div class="sm-title">Status message</div>
+                <div class="sm-emojis" id="sm-emojis"></div>
+                <input id="sm-text" maxlength="140" placeholder="What's your status?" autocomplete="off">
+                <select id="sm-duration">
+                    <option value="">Don't clear</option>
+                    <option value="30">Clear after 30 minutes</option>
+                    <option value="60">Clear after 1 hour</option>
+                    <option value="240">Clear after 4 hours</option>
+                    <option value="today">Clear today</option>
+                    <option value="week">Clear this week</option>
+                </select>
+                <div class="sm-actions">
+                    <button class="modal-btn primary" style="flex:1;" onclick="saveStatusMessage()">Save</button>
+                    <button class="modal-btn ghost" onclick="clearStatusMessage()">Clear</button>
+                </div>
             </div>
             {% if is_admin %}
             <button class="icon-btn" id="requests-btn" title="Approval requests" onclick="openRequests()" style="position:relative;">&#128276;<span class="badge" id="requests-badge" style="position:absolute; top:-3px; right:-3px; display:none; background:var(--danger);">0</span></button>
@@ -820,6 +878,9 @@
         const initialStatus = {{ online_status|tojson }};
         const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
         let pendingRequests = {{ pending_requests|tojson }};
+        let myManual = {{ (current_user.manual_presence)|tojson }};   // null | 'busy' | 'dnd' | 'away'
+        let myStatusMessage = {{ my_status_message|tojson }};          // {emoji,text} | null
+        const statusMessages = {{ status_messages|tojson }};           // uid -> {emoji,text} | null
     </script>
 
     <script>
@@ -1874,15 +1935,23 @@
             return `last seen ${d.toLocaleDateString('en-US', { timeZone: APP_TZ, month: 'short', day: 'numeric' })}`;
         }
         const userStatus = {}; // uid -> 'active' | 'away'
+        const PRESENCE_LABEL = { active: 'Active now', away: 'Away', busy: 'Busy', dnd: 'Do not disturb' };
+        function statusMsgText(uid) {
+            const m = statusMessages[uid];
+            if (!m || !(m.emoji || m.text)) return '';
+            return ((m.emoji ? m.emoji + ' ' : '') + (m.text || '')).trim();
+        }
         function setDmSubtitle(uid) {
             const sub = document.getElementById('chat-subtitle');
+            const sm = statusMsgText(uid);
             if (onlineUsers.has(uid)) {
-                const away = userStatus[uid] === 'away';
-                sub.textContent = away ? 'Away' : 'Active now';
-                sub.classList.toggle('online', !away);
-                sub.classList.toggle('away', away);
+                const st = userStatus[uid] || 'active';
+                const label = PRESENCE_LABEL[st] || 'Active now';
+                sub.textContent = sm ? label + ' · ' + sm : label;
+                sub.classList.toggle('online', st === 'active');
+                sub.classList.remove('away');
             } else {
-                sub.textContent = formatLastSeen(lastSeenMap[uid]);
+                sub.textContent = sm || formatLastSeen(lastSeenMap[uid]);
                 sub.classList.remove('online'); sub.classList.remove('away');
             }
         }
@@ -1891,8 +1960,10 @@
             else { onlineUsers.delete(uid); delete userStatus[uid]; }
             const dot = document.getElementById('dot-' + uid);
             if (dot) {
+                const st = userStatus[uid];
                 dot.classList.toggle('on', online);
-                dot.classList.toggle('away', online && userStatus[uid] === 'away');
+                dot.classList.remove('away', 'busy', 'dnd');
+                if (online && (st === 'away' || st === 'busy' || st === 'dnd')) dot.classList.add(st);
             }
             if (currentChatType === 'dm' && currentChatId === uid) setDmSubtitle(uid);
         }
@@ -1917,6 +1988,7 @@
             socket.emit('presence_status', { status: s });
         }
         function refreshStatus() {
+            if (myManual) return;   // a manual availability (busy/dnd/away) overrides the auto idle signal
             const away = document.hidden || (Date.now() - lastActivity > IDLE_MS);
             reportStatus(away ? 'away' : 'active');
         }
@@ -1927,6 +1999,91 @@
             }, { passive: true }));
         document.addEventListener('visibilitychange', refreshStatus);
         setInterval(refreshStatus, 30000);
+
+        /* ---------- my availability + custom status ---------- */
+        const STATUS_EMOJIS = ['💻','🍔','📅','🎧','🤒','🌴','☕','🏠','🎯','🚀'];
+        let selectedStatusEmoji = (myStatusMessage && myStatusMessage.emoji) || '';
+        function renderStatusEmojis() {
+            document.getElementById('sm-emojis').innerHTML = STATUS_EMOJIS.map(e =>
+                `<div class="se${e === selectedStatusEmoji ? ' sel' : ''}" onclick="selectStatusEmoji('${e}')">${e}</div>`).join('');
+        }
+        function selectStatusEmoji(e) { selectedStatusEmoji = (selectedStatusEmoji === e) ? '' : e; renderStatusEmojis(); }
+        function toggleStatusMenu(ev) {
+            if (ev) ev.stopPropagation();
+            const m = document.getElementById('status-menu');
+            const open = m.style.display !== 'block';
+            if (open) {
+                selectedStatusEmoji = (myStatusMessage && myStatusMessage.emoji) || '';
+                document.getElementById('sm-text').value = (myStatusMessage && myStatusMessage.text) || '';
+                renderStatusEmojis();
+                document.querySelectorAll('#status-menu .sm-opt').forEach((o, i) => {
+                    o.classList.toggle('sel', (myManual || 'available') === ['available','busy','dnd','away'][i]);
+                });
+            }
+            m.style.display = open ? 'block' : 'none';
+        }
+        function setPresence(p) {
+            myManual = (p === 'available') ? null : p;
+            socket.emit('set_presence', { presence: p });
+            updateMyPresenceUI();
+            if (!myManual) refreshStatus();   // resume the auto idle signal
+            document.getElementById('status-menu').style.display = 'none';
+        }
+        function durationMinutes(val) {
+            if (!val) return 0;
+            if (val === 'today') { const now = new Date(), end = new Date(now); end.setHours(23,59,0,0); return Math.max(1, Math.round((end - now) / 60000)); }
+            if (val === 'week') return 7 * 24 * 60;
+            const n = parseInt(val); return isNaN(n) ? 0 : n;
+        }
+        function saveStatusMessage() {
+            const text = document.getElementById('sm-text').value.trim();
+            const minutes = durationMinutes(document.getElementById('sm-duration').value);
+            socket.emit('set_status_message', { emoji: selectedStatusEmoji, text, minutes });
+            myStatusMessage = (selectedStatusEmoji || text) ? { emoji: selectedStatusEmoji, text } : null;
+            statusMessages[myUserId] = myStatusMessage;
+            updateMyPresenceUI(); applyStatusEmoji(myUserId);
+            document.getElementById('status-menu').style.display = 'none';
+        }
+        function clearStatusMessage() {
+            socket.emit('set_status_message', { emoji: '', text: '', minutes: 0 });
+            myStatusMessage = null; statusMessages[myUserId] = null; selectedStatusEmoji = '';
+            document.getElementById('sm-text').value = '';
+            updateMyPresenceUI(); applyStatusEmoji(myUserId);
+            document.getElementById('status-menu').style.display = 'none';
+        }
+        function updateMyPresenceUI() {
+            const eff = myManual || 'active';
+            const dot = document.getElementById('my-dot');
+            dot.className = 'dot on';
+            if (eff === 'away' || eff === 'busy' || eff === 'dnd') dot.classList.add(eff);
+            const labels = { active: 'Available', away: 'Away', busy: 'Busy', dnd: 'Do not disturb' };
+            const sm = (myStatusMessage && (myStatusMessage.emoji || myStatusMessage.text))
+                ? ((myStatusMessage.emoji ? myStatusMessage.emoji + ' ' : '') + (myStatusMessage.text || '')).trim() : '';
+            document.getElementById('me-status-label').textContent = sm || labels[eff];
+        }
+        function applyStatusEmoji(uid) {
+            const nav = document.getElementById('nav-dm-' + uid);
+            const nameEl = nav && nav.querySelector('.name');
+            if (!nameEl) return;
+            let span = nameEl.querySelector('.status-emoji');
+            const m = statusMessages[uid];
+            const emoji = (m && m.emoji) ? m.emoji : '';
+            if (emoji) { if (!span) { span = document.createElement('span'); span.className = 'status-emoji'; nameEl.appendChild(span); } span.textContent = emoji; }
+            else if (span) { span.remove(); }
+        }
+        socket.on('status_message_update', function(data) {
+            statusMessages[data.user_id] = data.status_message;
+            applyStatusEmoji(data.user_id);
+            if (currentChatType === 'dm' && currentChatId === data.user_id) setDmSubtitle(data.user_id);
+            if (data.user_id === myUserId) { myStatusMessage = data.status_message; updateMyPresenceUI(); }
+        });
+        document.addEventListener('click', function(e) {
+            const m = document.getElementById('status-menu');
+            if (m.style.display === 'block' && !m.contains(e.target) && !document.getElementById('me-status').contains(e.target))
+                m.style.display = 'none';
+        });
+        updateMyPresenceUI();
+        Object.keys(statusMessages).forEach(uid => applyStatusEmoji(parseInt(uid)));
         // Screen-lock / idle detection (Chrome Idle Detection API, needs permission)
         let idleDetectorStarted = false;
         async function startIdleDetector() {
@@ -2238,7 +2395,7 @@
                 else showNewMsgPill();
                 if (data.sender_id !== myUserId) {
                     const mk = data.type === 'dm' ? `dm:${data.sender_id}` : `group:${data.group_id}`;
-                    if (!mutedChats.has(mk)) {
+                    if (!mutedChats.has(mk) && myManual !== 'dnd') {
                         playNotif(mentionsMe);
                         browserNotify(mentionsMe ? `${data.username} mentioned you` : data.username, data.message || 'Sent an attachment');
                     }
@@ -2246,7 +2403,7 @@
                 }
             } else if (data.sender_id !== myUserId) {
                 const muteKey = data.type === 'dm' ? `dm:${data.sender_id}` : `group:${data.group_id}`;
-                const muted = mutedChats.has(muteKey);
+                const muted = mutedChats.has(muteKey) || myManual === 'dnd';   // Do Not Disturb silences everything
                 const preview = data.file_name ? `Sent an attachment: ${data.file_name}` : data.message;
                 if (!muted && mentionsMe) { showToast(`${data.username} mentioned you in #${data.group_name}`, preview, true); playNotif(true); browserNotify(`${data.username} mentioned you`, preview); }
                 else if (!muted) { const title = data.type === 'dm' ? `Message from ${data.username}` : `New in #${data.group_name}`; showToast(title, preview, false); playNotif(false); browserNotify(title, preview); }
