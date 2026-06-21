@@ -1,0 +1,13 @@
+.git/
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+instance/
+*.db
+*.sqlite3
+.env
+heroku.dump
+*.log

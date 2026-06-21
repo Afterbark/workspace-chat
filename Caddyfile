@@ -1,0 +1,6 @@
+# Caddy terminates TLS (auto Let's Encrypt cert for $DOMAIN) and reverse-proxies
+# to the app. reverse_proxy passes WebSocket upgrades through automatically, so
+# Socket.IO works with no extra config. HTTPS is required for web push + PWA.
+{$DOMAIN} {
+	reverse_proxy web:8000
+}

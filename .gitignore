@@ -11,3 +11,7 @@ env/
 
 # Local env / secrets
 .env
+
+# Database dumps (e.g. the Heroku migration dump)
+*.dump
+heroku.dump
