@@ -279,7 +279,10 @@
         #react-palette span { font-size: 20px; cursor: pointer; padding: 2px 4px; border-radius: 8px; }
         #react-palette span:hover { background: var(--accent-soft); transform: scale(1.15); }
 
-        #seen-indicator { align-self: flex-end; font-size: 11px; color: var(--text-soft); margin: 2px 4px 8px; font-weight: 600; }
+        .seen-track { display: flex; justify-content: flex-end; gap: 2px; margin-top: 3px; }
+        .seen-av { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
+            box-shadow: 0 0 0 2px var(--bg); animation: seenPop .3s ease; }
+        @keyframes seenPop { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: none; } }
 
         #typing-indicator { color: var(--text-soft); font-size: 13px; font-style: italic; padding: 0 8% 4px; min-height: 18px; display: none; }
 
@@ -1905,23 +1908,63 @@
         });
 
         /* ---------- seen indicator ---------- */
+        // Messenger-style read receipts: each reader's small avatar sits under the last
+        // message *I* sent that they've read, and slides down (FLIP animation) as they
+        // read further.
+        let seenAvatars = {};   // reader_id -> img element (persists so it can animate between rows)
+        function makeSeenAv(id, name) {
+            const av = document.createElement('img');
+            av.className = 'seen-av';
+            av.src = avatarFor(id, name);
+            av.dataset.uname = name || '';
+            av.title = 'Seen by ' + (name || 'someone');
+            av.onerror = function () { avatarFallback(this); };
+            return av;
+        }
+        // The last message I sent with id <= the reader's last-read id (rows are in order).
+        function seenTargetRow(lastReadId) {
+            let target = null;
+            for (const r of document.querySelectorAll('.message-row.mine')) {
+                if (parseInt(r.dataset.msgId) <= lastReadId) target = r; else break;
+            }
+            return target;
+        }
         function updateSeenIndicator() {
-            const old = document.getElementById('seen-indicator'); if (old) old.remove();
-            if (!currentChatType) return;
-            const chatBox = document.getElementById('chat-box');
-            const myRows = chatBox.querySelectorAll('.message-row.mine');
-            if (!myRows.length) return;
-            const lastMine = myRows[myRows.length - 1];
-            const lastId = parseInt(lastMine.dataset.msgId);
-            const readers = Object.values(seenState).filter(s => s.last_read_id >= lastId);
-            if (!readers.length) return;
-            const names = readers.map(r => r.name);
-            let shown = names.slice(0, 3).join(', ');
-            if (names.length > 3) shown += ` +${names.length - 3} more`;
-            const el = document.createElement('div'); el.id = 'seen-indicator';
-            el.textContent = '✓✓ Seen by ' + shown;
-            el.title = 'Seen by ' + names.join(', ');  // full list on hover
-            lastMine.insertAdjacentElement('afterend', el);
+            const legacy = document.getElementById('seen-indicator'); if (legacy) legacy.remove();
+            const readers = Object.keys(seenState).map(Number)
+                .filter(id => id !== myUserId && seenState[id] && seenState[id].last_read_id);
+
+            // FLIP step 1: remember where each existing avatar is right now.
+            const firsts = {};
+            for (const id of readers) if (seenAvatars[id]) firsts[id] = seenAvatars[id].getBoundingClientRect();
+
+            // Drop avatars for readers who are no longer present.
+            for (const k of Object.keys(seenAvatars))
+                if (!readers.includes(Number(k))) { seenAvatars[k].remove(); delete seenAvatars[k]; }
+
+            // Place each reader's avatar under the right message.
+            for (const id of readers) {
+                const target = seenTargetRow(seenState[id].last_read_id);
+                let av = seenAvatars[id];
+                if (!target) { if (av) av.remove(); continue; }
+                if (!av) { av = makeSeenAv(id, seenState[id].name); seenAvatars[id] = av; }
+                let track = target.querySelector('.seen-track');
+                if (!track) { track = document.createElement('div'); track.className = 'seen-track'; target.querySelector('.msg-col').appendChild(track); }
+                track.appendChild(av);
+            }
+            document.querySelectorAll('.seen-track').forEach(t => { if (!t.children.length) t.remove(); });
+
+            // FLIP step 2: animate each avatar from its old spot to the new one.
+            for (const id of readers) {
+                const av = seenAvatars[id]; if (!av || !firsts[id]) continue;
+                const last = av.getBoundingClientRect();
+                const dx = firsts[id].left - last.left, dy = firsts[id].top - last.top;
+                if (dx || dy) {
+                    av.style.transition = 'none';
+                    av.style.transform = `translate(${dx}px, ${dy}px)`;
+                    requestAnimationFrame(() => { av.style.transition = 'transform .35s cubic-bezier(.4,0,.2,1)'; av.style.transform = ''; });
+                }
+            }
         }
 
         /* ---------- presence ---------- */
@@ -2298,6 +2341,7 @@
         socket.on('load_history', function(payload) {
             const chatBox = document.getElementById('chat-box');
             chatBox.innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
+            seenAvatars = {};   // old avatar elements were just wiped with the chat box
             hasMoreOlder = payload.has_more; seenState = payload.seen || {};
             pinnedList = payload.pinned || [];
             if (payload.members) { groupMembers = payload.members; groupMemberCount = payload.member_count || payload.members.length; }
