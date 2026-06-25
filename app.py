@@ -1,5 +1,12 @@
 from gevent import monkey
 monkey.patch_all()
+# Make psycopg2 (Postgres) cooperative with gevent so a DB query doesn't freeze
+# the whole worker while it waits. No-op on local SQLite / if psycogreen is absent.
+try:
+    from psycogreen.gevent import patch_psycopg
+    patch_psycopg()
+except Exception:
+    pass
 import os
 import re
 import uuid
@@ -1508,6 +1515,7 @@ def handle_message(data):
     reply_to_id = data.get('reply_to_id')
     reply_to_id = int(reply_to_id) if reply_to_id else None
     priority = norm_priority(data.get('priority'))
+    client_id = data.get('client_id')   # echoed back so the sender can match its optimistic bubble
 
     if chat_type == 'dm' and is_blocked_between(current_user.id, chat_id):
         return
@@ -1532,7 +1540,7 @@ def handle_message(data):
         'ts_iso': iso_utc(new_msg.timestamp), 'mentions': mentions,
         'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
         'pinned': False, 'forwarded': False, 'preview': None,
-        'priority': priority, 'praise': None
+        'priority': priority, 'praise': None, 'client_id': client_id
     }
 
     if chat_type == 'dm':

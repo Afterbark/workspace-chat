@@ -511,6 +511,10 @@
         /* new message slides in */
         @keyframes msgIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
         .message-row.msg-in { animation: msgIn .18s ease-out; }
+        .message-row.pending .bubble { opacity: .6; }
+        .message-row.pending .msg-actions { display: none; }
+        .message-row.failed .bubble { opacity: 1; outline: 1px solid var(--danger); }
+        .message-row.failed .time { color: var(--danger); }
     </style>
 </head>
 <body>
@@ -1203,6 +1207,28 @@
             renderedMessages.add(msg.msg_id);
             if (oldestRenderedId === null || msg.msg_id < oldestRenderedId) oldestRenderedId = msg.msg_id;
             rebuildDateSeparators();
+        }
+
+        // Optimistic local echo: show my own message instantly with a "sending" clock.
+        // The server's receive_message echo (matched by client_id) replaces it with the
+        // real message. NOT added to renderedMessages (its id is a temporary client id).
+        function appendOptimistic(msg) {
+            const chatBox = document.getElementById('chat-box');
+            msg.msg_id = msg.client_id;
+            const row = makeMessageEl(msg);
+            row.dataset.clientId = msg.client_id;
+            row.classList.add('pending', 'msg-in');
+            applyGrouping(row, chatBox.querySelector('.message-row:last-of-type'));
+            const time = row.querySelector('.time'); if (time) time.textContent = '🕓';
+            chatBox.appendChild(row);
+            rebuildDateSeparators();
+            chatBox.scrollTop = chatBox.scrollHeight;
+            hideNewMsgPill();
+            // if the server never confirms it, flag it as not-sent
+            setTimeout(() => {
+                const r = chatBox.querySelector(`.message-row.pending[data-client-id="${msg.client_id}"]`);
+                if (r) { r.classList.add('failed'); const t = r.querySelector('.time'); if (t) { t.textContent = '⚠'; t.title = 'Not sent — check your connection'; } }
+            }, 12000);
         }
 
         function prependMessages(msgs) {
@@ -2426,13 +2452,30 @@
             if (inThisChat) {
                 const chatBox = document.getElementById('chat-box');
                 const nearBottom = (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight) < 140;
-                appendMessage({
+                const realMsg = {
                     msg_id: data.msg_id, sender: data.username, sender_id: data.sender_id, content: data.message,
                     file_url: data.file_url, file_type: data.file_type, file_name: data.file_name,
                     timestamp: data.timestamp, ts_iso: data.ts_iso, reply_to: data.reply_to, reactions: data.reactions || [],
                     edited: data.edited, forwarded: data.forwarded, preview: data.preview, pinned: data.pinned,
                     priority: data.priority, praise: data.praise
-                });
+                };
+                // If this is the echo of my own optimistic message, swap that bubble in place.
+                const opt = (data.sender_id === myUserId && data.client_id)
+                    ? chatBox.querySelector(`.message-row[data-client-id="${data.client_id}"]`) : null;
+                if (opt) {
+                    const realRow = makeMessageEl(realMsg);
+                    let prev = opt.previousElementSibling;
+                    while (prev && !prev.classList.contains('message-row')) prev = prev.previousElementSibling;
+                    applyGrouping(realRow, prev);
+                    opt.replaceWith(realRow);
+                    renderedMessages.add(data.msg_id);
+                    if (oldestRenderedId === null || data.msg_id < oldestRenderedId) oldestRenderedId = data.msg_id;
+                    rebuildDateSeparators();
+                    updateSeenIndicator();
+                    if (nearBottom) chatBox.scrollTop = chatBox.scrollHeight;
+                    return;
+                }
+                appendMessage(realMsg);
                 document.getElementById('typing-indicator').style.display = 'none';
                 updateSeenIndicator();
                 triggerFlair(data.message);
@@ -2633,8 +2676,20 @@
             }
             // accompanying text (also acts as the message / caption)
             if (text.trim() !== '') {
+                const clientId = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+                const prio = pendingPriority;
+                let optReply = null;
+                if (replyTo) {
+                    const r = findRow(replyTo.msg_id);
+                    optReply = { msg_id: replyTo.msg_id,
+                        sender: (r && r.dataset.senderId == myUserId) ? myUsername : (r && r.querySelector('.sender') ? r.querySelector('.sender').textContent : ''),
+                        snippet: (r && r.dataset.content) || '' };
+                }
+                // show it instantly (optimistic); the server echo replaces it with the real message
+                appendOptimistic({ client_id: clientId, sender: myUsername, sender_id: myUserId, content: text,
+                    ts_iso: new Date().toISOString(), reactions: [], priority: prio, reply_to: optReply });
                 socket.emit('send_message', { type: currentChatType, id: currentChatId, message: text,
-                    reply_to_id: replyTo ? replyTo.msg_id : null, priority: pendingPriority });
+                    reply_to_id: replyTo ? replyTo.msg_id : null, priority: prio, client_id: clientId });
             }
             clearComposerContext();
             setPriority('normal');
