@@ -76,6 +76,14 @@ except Exception:
 
 app = Flask(__name__)
 
+# Don't let browsers cache HTML pages, so a new deploy shows up on a normal
+# refresh instead of serving a stale cached page. Static assets are unaffected.
+@app.after_request
+def _no_cache_html(resp):
+    if resp.headers.get('Content-Type', '').startswith('text/html'):
+        resp.headers['Cache-Control'] = 'no-store, max-age=0'
+    return resp
+
 # Fallback to dev key if SECRET_KEY environment variable isn't set
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'my_super_secret_key')
 
