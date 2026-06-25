@@ -569,7 +569,9 @@
         </div>
 
         <div class="search-wrap">
-            <input type="text" id="filter-input" placeholder="Filter conversations..." oninput="filterChats(this.value)">
+            <input type="search" id="filter-input" name="conversation-filter" placeholder="Filter conversations..."
+                   autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+                   readonly onfocus="this.removeAttribute('readonly')" oninput="filterChats(this.value)">
             <button class="icon-btn" title="Search messages" onclick="openSearch()">&#128269;</button>
         </div>
 
