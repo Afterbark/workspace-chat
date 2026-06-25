@@ -1098,8 +1098,9 @@
         function buildFileHtml(fileUrl, fileType, fileName) {
             if (!fileUrl) return '';
             if (fileType === 'image') { const u = proxiedGif(fileUrl); return `<img src="${u}" class="chat-img" onclick="openLightbox('${u}')">`; }
-            if (fileType === 'video') return `<video controls><source src="${fileUrl}"></video>`;
-            if (fileType === 'audio') {
+            // Voice notes record as .webm (which the server tags as "video"), so detect
+            // them by the "voice_" filename too and show the waveform player.
+            if (fileType === 'audio' || (fileName && /^voice_/i.test(fileName))) {
                 return `<div class="voice-player" data-url="${escapeHtml(fileUrl)}">
                     <button class="vp-play" type="button" onclick="voiceToggle(this)" aria-label="Play voice message">&#9654;</button>
                     <div class="vp-wave" onclick="voiceSeek(event, this)">${voiceBars(fileUrl)}</div>
@@ -1109,6 +1110,7 @@
                         onplay="voiceState(this,true)" onpause="voiceState(this,false)"></audio>
                 </div>`;
             }
+            if (fileType === 'video') return `<video controls><source src="${fileUrl}"></video>`;
             return `<a class="file-chip" href="${fileUrl}" target="_blank" download="${escapeHtml(fileName)}">&#128206; ${escapeHtml(fileName)}</a>`;
         }
 
