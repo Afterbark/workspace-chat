@@ -518,7 +518,9 @@
 
         /* animated typing bubble */
         .typing-row { display: flex; align-items: flex-end; gap: 8px; margin-top: 12px; max-width: 75%; }
-        .typing-row .row-avatar { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+        .typing-avs { display: flex; align-items: flex-end; flex-shrink: 0; }
+        .typing-av { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; box-shadow: 0 0 0 2px var(--bg); }
+        .typing-av + .typing-av { margin-left: -12px; }
         .typing-bubble { background: var(--other-bubble); border: 1px solid var(--border); box-shadow: var(--shadow-sm);
             border-radius: var(--r-lg); border-top-left-radius: 5px; padding: 12px 14px; display: flex; gap: 4px; align-items: center; }
         .typing-bubble span { width: 7px; height: 7px; border-radius: 50%; background: var(--text-soft);
@@ -2480,6 +2482,7 @@
             const chatBox = document.getElementById('chat-box');
             chatBox.innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
             seenAvatars = {};   // old avatar elements were just wiped with the chat box
+            hideTypingBubble(); // clear typers from the previous chat
             hasMoreOlder = payload.has_more; seenState = payload.seen || {};
             pinnedList = payload.pinned || [];
             if (payload.members) { groupMembers = payload.members; groupMemberCount = payload.member_count || payload.members.length; }
@@ -2529,24 +2532,34 @@
             if ((this.scrollHeight - this.scrollTop - this.clientHeight) < 140) hideNewMsgPill();
         });
 
-        // Animated typing bubble that appears at the bottom of the chat (Messenger-style).
-        let typingRowEl = null, typingHideTimer = null;
-        function showTypingBubble(senderId, username) {
+        // Animated typing bubble — supports several people typing at once (their avatars
+        // stack next to one dots bubble). Each typer has its own expiry timer.
+        let typingRowEl = null;
+        const typers = {};   // sender_id -> { username, timer }
+        function renderTypers() {
             const chatBox = document.getElementById('chat-box');
+            const ids = Object.keys(typers);
+            if (!ids.length) { if (typingRowEl && typingRowEl.parentNode) typingRowEl.remove(); return; }
             const nearBottom = (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight) < 160;
-            if (!typingRowEl) {
-                typingRowEl = document.createElement('div');
-                typingRowEl.className = 'typing-row msg-in';
-                typingRowEl.innerHTML = '<img class="row-avatar" onerror="avatarFallback(this)"><div class="typing-bubble"><span></span><span></span><span></span></div>';
-            }
-            const av = typingRowEl.querySelector('.row-avatar');
-            av.src = avatarFor(senderId, username); av.dataset.uname = username || '';
-            chatBox.appendChild(typingRowEl);   // always the last element
+            if (!typingRowEl) { typingRowEl = document.createElement('div'); typingRowEl.className = 'typing-row msg-in'; }
+            const avs = ids.slice(0, 3).map(id =>
+                `<img class="typing-av" src="${avatarFor(+id, typers[id].username)}" data-uname="${escapeHtml(typers[id].username || '')}" onerror="avatarFallback(this)">`).join('');
+            typingRowEl.innerHTML = `<div class="typing-avs">${avs}</div><div class="typing-bubble"><span></span><span></span><span></span></div>`;
+            chatBox.appendChild(typingRowEl);   // always last
             if (nearBottom) chatBox.scrollTop = chatBox.scrollHeight;
-            clearTimeout(typingHideTimer);
-            typingHideTimer = setTimeout(hideTypingBubble, 2500);
         }
-        function hideTypingBubble() { clearTimeout(typingHideTimer); if (typingRowEl && typingRowEl.parentNode) typingRowEl.remove(); }
+        function showTypingBubble(senderId, username) {
+            if (typers[senderId]) clearTimeout(typers[senderId].timer);
+            typers[senderId] = { username, timer: setTimeout(() => { delete typers[senderId]; renderTypers(); }, 2800) };
+            renderTypers();
+        }
+        function hideTyper(senderId) {   // one person sent / stopped
+            if (typers[senderId]) { clearTimeout(typers[senderId].timer); delete typers[senderId]; renderTypers(); }
+        }
+        function hideTypingBubble() {    // clear everyone (e.g. on chat switch)
+            for (const k in typers) { clearTimeout(typers[k].timer); delete typers[k]; }
+            if (typingRowEl && typingRowEl.parentNode) typingRowEl.remove();
+        }
         function keepTypingLast() { const cb = document.getElementById('chat-box'); if (typingRowEl && typingRowEl.parentNode === cb) cb.appendChild(typingRowEl); }
 
         socket.on('user_typing', function(data) {
@@ -2603,7 +2616,7 @@
                     return;
                 }
                 appendMessage(realMsg);
-                hideTypingBubble();
+                hideTyper(data.sender_id);
                 updateSeenIndicator();
                 triggerFlair(data.message);
                 // only snap to bottom if the reader is already there (or it's their own message)
