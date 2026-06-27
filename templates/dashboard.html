@@ -2534,19 +2534,31 @@
 
         // Animated typing bubble — supports several people typing at once (their avatars
         // stack next to one dots bubble). Each typer has its own expiry timer.
-        let typingRowEl = null;
+        let typingRowEl = null, typingAvKey = '';
         const typers = {};   // sender_id -> { username, timer }
         function renderTypers() {
             const chatBox = document.getElementById('chat-box');
             const ids = Object.keys(typers);
-            if (!ids.length) { if (typingRowEl && typingRowEl.parentNode) typingRowEl.remove(); return; }
+            if (!ids.length) { if (typingRowEl && typingRowEl.parentNode) typingRowEl.remove(); typingAvKey = ''; return; }
             const nearBottom = (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight) < 160;
-            if (!typingRowEl) { typingRowEl = document.createElement('div'); typingRowEl.className = 'typing-row msg-in'; }
-            const avs = ids.slice(0, 3).map(id =>
-                `<img class="typing-av" src="${avatarFor(+id, typers[id].username)}" data-uname="${escapeHtml(typers[id].username || '')}" onerror="avatarFallback(this)">`).join('');
-            typingRowEl.innerHTML = `<div class="typing-avs">${avs}</div><div class="typing-bubble"><span></span><span></span><span></span></div>`;
-            chatBox.appendChild(typingRowEl);   // always last
-            if (nearBottom) chatBox.scrollTop = chatBox.scrollHeight;
+            if (!typingRowEl) {
+                typingRowEl = document.createElement('div');
+                typingRowEl.className = 'typing-row msg-in';
+                // The dots bubble is built ONCE so its bounce animation runs continuously.
+                typingRowEl.innerHTML = '<div class="typing-avs"></div><div class="typing-bubble"><span></span><span></span><span></span></div>';
+            }
+            // Only rebuild the avatars when the set of typers changes — never on every
+            // keystroke, so the dots don't reset and glitch.
+            const key = ids.slice(0, 3).sort().join(',');
+            if (key !== typingAvKey) {
+                typingAvKey = key;
+                typingRowEl.querySelector('.typing-avs').innerHTML = ids.slice(0, 3).map(id =>
+                    `<img class="typing-av" src="${avatarFor(+id, typers[id].username)}" data-uname="${escapeHtml(typers[id].username || '')}" onerror="avatarFallback(this)">`).join('');
+            }
+            if (typingRowEl.parentNode !== chatBox) {
+                chatBox.appendChild(typingRowEl);
+                if (nearBottom) chatBox.scrollTop = chatBox.scrollHeight;
+            }
         }
         function showTypingBubble(senderId, username) {
             if (typers[senderId]) clearTimeout(typers[senderId].timer);
@@ -2558,6 +2570,7 @@
         }
         function hideTypingBubble() {    // clear everyone (e.g. on chat switch)
             for (const k in typers) { clearTimeout(typers[k].timer); delete typers[k]; }
+            typingAvKey = '';
             if (typingRowEl && typingRowEl.parentNode) typingRowEl.remove();
         }
         function keepTypingLast() { const cb = document.getElementById('chat-box'); if (typingRowEl && typingRowEl.parentNode === cb) cb.appendChild(typingRowEl); }
