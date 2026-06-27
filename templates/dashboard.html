@@ -279,6 +279,23 @@
         #react-palette span { font-size: 20px; cursor: pointer; padding: 2px 4px; border-radius: 8px; }
         #react-palette span:hover { background: var(--accent-soft); transform: scale(1.15); }
 
+        /* hover cards: who-reacted + profile */
+        #hover-card { position: fixed; z-index: 400; display: none; background: var(--panel); border: 1px solid var(--border);
+            border-radius: var(--r-md); box-shadow: var(--shadow-lg); padding: 10px 12px; max-width: 240px; font-size: 13px; }
+        .hc-react .hc-emoji { font-size: 22px; text-align: center; margin-bottom: 6px; }
+        .hc-react .hc-list { display: flex; flex-direction: column; gap: 7px; max-height: 210px; overflow-y: auto; }
+        .hc-person { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+        .hc-person img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+        .hc-profile { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; min-width: 150px; }
+        .hc-avatar { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; margin-bottom: 3px; }
+        .hc-name { font-weight: 700; font-size: 14px; }
+        .hc-presence { display: flex; align-items: center; gap: 6px; color: var(--text-soft); font-size: 12px; }
+        .hc-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-soft); position: relative; flex-shrink: 0; }
+        .hc-dot.on { background: var(--green); } .hc-dot.away { background: var(--amber); } .hc-dot.busy { background: var(--danger); }
+        .hc-dot.dnd { background: var(--danger); }
+        .hc-dot.dnd::after { content: ''; position: absolute; left: 1.5px; right: 1.5px; top: 50%; height: 1.5px; transform: translateY(-50%); background: #fff; }
+        .hc-status { font-size: 12.5px; color: var(--text); margin-top: 2px; }
+
         .seen-track { display: flex; justify-content: flex-end; gap: 2px; margin-top: 3px; }
         .seen-av { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
             box-shadow: 0 0 0 2px var(--bg); animation: seenPop .3s ease; }
@@ -548,6 +565,7 @@
     <div id="toast-container"></div>
     <div id="lightbox" onclick="this.style.display='none'"><img src=""></div>
     <div id="react-palette"></div>
+    <div id="hover-card"></div>
 
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
@@ -611,7 +629,7 @@
                 {% set self_avatar = current_user.profile_pic if current_user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + current_user.profile_pic) if current_user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + current_user.username + '&background=2563eb&color=fff') %}
                 <div class="item chat-nav" id="nav-dm-{{ current_user.id }}" data-name="saved messages you {{ current_user.username|lower }}" onclick="openChat('dm', {{ current_user.id }}, 'Saved messages')">
                     <span class="avatar-wrap">
-                        <img src="{{ self_avatar }}" class="profile-pic" data-uname="{{ current_user.username }}" onerror="avatarFallback(this)">
+                        <img src="{{ self_avatar }}" class="profile-pic" data-profile-id="{{ current_user.id }}" data-uname="{{ current_user.username }}" onerror="avatarFallback(this)">
                         <span class="self-ic" title="Notes to self">&#128221;</span>
                     </span>
                     <span class="name">Saved messages <small style="color:var(--text-soft); font-weight:500;">(you)</small></span>
@@ -620,7 +638,7 @@
                     {% set avatar = user.profile_pic if user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=2563eb&color=fff') %}
                     <div class="item chat-nav" id="nav-dm-{{ user.id }}" data-name="{{ user.username|lower }}" onclick="openChat('dm', {{ user.id }}, '{{ user.username }}')">
                         <span class="avatar-wrap">
-                            <img src="{{ avatar }}" class="profile-pic" data-uname="{{ user.username }}" onerror="avatarFallback(this)">
+                            <img src="{{ avatar }}" class="profile-pic" data-profile-id="{{ user.id }}" data-uname="{{ user.username }}" onerror="avatarFallback(this)">
                             <span class="dot" id="dot-{{ user.id }}"></span>
                         </span>
                         <span class="name">{{ user.username }}</span>
@@ -1216,7 +1234,7 @@
                 return row;
             }
 
-            const avatar = `<img src="${avatarFor(msg.sender_id, msg.sender || msg.username)}" class="row-avatar" data-uname="${escapeHtml(msg.sender || msg.username || '')}" onerror="avatarFallback(this)">`;
+            const avatar = `<img src="${avatarFor(msg.sender_id, msg.sender || msg.username)}" class="row-avatar" data-profile-id="${msg.sender_id}" data-uname="${escapeHtml(msg.sender || msg.username || '')}" onerror="avatarFallback(this)">`;
 
             if (msg.is_deleted) {
                 row.innerHTML = `${avatar}<div class="msg-col"><div class="bubble deleted">🚫 This message was deleted</div></div>`;
@@ -1286,6 +1304,57 @@
             return row;
         }
 
+        /* ---------- hover cards: who reacted + profile ---------- */
+        let hoverCardTimer = null;
+        function hideHoverCard() { document.getElementById('hover-card').style.display = 'none'; }
+        function showHoverCard(html, anchor) {
+            const card = document.getElementById('hover-card');
+            card.innerHTML = html;
+            card.style.display = 'block';
+            const r = anchor.getBoundingClientRect(), cw = card.offsetWidth, ch = card.offsetHeight;
+            const left = Math.max(8, Math.min(r.left + r.width / 2 - cw / 2, window.innerWidth - cw - 8));
+            let top = r.top - ch - 8;
+            if (top < 8) top = r.bottom + 8;   // flip below if no room above
+            card.style.left = left + 'px'; card.style.top = top + 'px';
+        }
+        function reactionCardHtml(chip) {
+            const ids = (chip.dataset.users || '').split(',').filter(Boolean).map(Number);
+            const rows = ids.map(id => {
+                const name = id === myUserId ? 'You' : (userNames[id] || 'Someone');
+                return `<div class="hc-person"><img src="${avatarFor(id, name)}" data-uname="${escapeHtml(name)}" onerror="avatarFallback(this)">${escapeHtml(name)}</div>`;
+            }).join('');
+            return `<div class="hc-react"><div class="hc-emoji">${chip.dataset.emoji || ''}</div><div class="hc-list">${rows}</div></div>`;
+        }
+        function profileCardHtml(id) {
+            const name = userNames[id] || 'User';
+            const self = id === myUserId;
+            const online = self ? true : onlineUsers.has(id);
+            const st = self ? (myManual || 'active') : (online ? (userStatus[id] || 'active') : 'offline');
+            const dotClass = st === 'active' ? 'on' : (st === 'away' ? 'away' : ((st === 'busy' || st === 'dnd') ? st : ''));
+            const label = online ? (PRESENCE_LABEL[st] || 'Active now') : formatLastSeen(lastSeenMap[id]);
+            const sm = statusMsgText(id);
+            return `<div class="hc-profile">
+                <img class="hc-avatar" src="${avatarFor(id, name)}" data-uname="${escapeHtml(name)}" onerror="avatarFallback(this)">
+                <div class="hc-name">${escapeHtml(name)}${self ? ' (you)' : ''}</div>
+                <div class="hc-presence"><span class="hc-dot ${dotClass}"></span>${escapeHtml(label)}</div>
+                ${sm ? `<div class="hc-status">${escapeHtml(sm)}</div>` : ''}
+            </div>`;
+        }
+        document.addEventListener('mouseover', function(e) {
+            if (!e.target || !e.target.closest) return;
+            if (e.target.closest('#hover-card')) { clearTimeout(hoverCardTimer); return; }
+            const chip = e.target.closest('.reaction-chip');
+            if (chip && chip.dataset.users) { clearTimeout(hoverCardTimer); showHoverCard(reactionCardHtml(chip), chip); return; }
+            const av = e.target.closest('[data-profile-id]');
+            if (av && av.dataset.profileId) { clearTimeout(hoverCardTimer); showHoverCard(profileCardHtml(+av.dataset.profileId), av); return; }
+        });
+        document.addEventListener('mouseout', function(e) {
+            if (!e.target || !e.target.closest) return;
+            if (e.target.closest('.reaction-chip') || e.target.closest('[data-profile-id]') || e.target.closest('#hover-card'))
+                hoverCardTimer = setTimeout(hideHoverCard, 150);
+        });
+        document.addEventListener('scroll', hideHoverCard, true);   // don't leave it floating mid-scroll
+
         function renderReactions(row, reactions) {
             const box = row.querySelector('.reactions');
             if (!box) return;
@@ -1295,8 +1364,8 @@
                 const chip = document.createElement('span');
                 chip.className = 'reaction-chip' + (mine ? ' mine' : '');
                 chip.innerHTML = `${r.emoji} <b>${r.user_ids.length}</b>`;
-                const names = r.user_ids.map(id => id === myUserId ? 'You' : (userNames[id] || 'Someone'));
-                chip.title = names.join(', ');
+                chip.dataset.users = r.user_ids.join(',');   // who reacted (for the hover card)
+                chip.dataset.emoji = r.emoji;
                 chip.onclick = () => socket.emit('toggle_reaction', { message_id: parseInt(row.dataset.msgId), emoji: r.emoji });
                 box.appendChild(chip);
             });
@@ -2297,7 +2366,7 @@
             if (!document.getElementById('nav-dm-' + newUser.id)) {
                 document.getElementById('dm-list').insertAdjacentHTML('beforeend', `
                     <div class="item chat-nav" id="nav-dm-${newUser.id}" data-name="${newUser.username.toLowerCase()}" onclick="openChat('dm', ${newUser.id}, '${newUser.username}')">
-                        <span class="avatar-wrap"><img src="${userAvatars[newUser.id]}" class="profile-pic" data-uname="${escapeHtml(newUser.username)}" onerror="avatarFallback(this)"><span class="dot" id="dot-${newUser.id}"></span></span>
+                        <span class="avatar-wrap"><img src="${userAvatars[newUser.id]}" class="profile-pic" data-profile-id="${newUser.id}" data-uname="${escapeHtml(newUser.username)}" onerror="avatarFallback(this)"><span class="dot" id="dot-${newUser.id}"></span></span>
                         <span class="name">${escapeHtml(newUser.username)}</span>
                         <span class="badge" id="badge-dm-${newUser.id}" style="display:none;">0</span>
                     </div>`);
