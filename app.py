@@ -76,6 +76,14 @@ except Exception:
 
 app = Flask(__name__)
 
+# Gzip responses (the ~200 KB dashboard HTML/JS shrinks to ~35 KB) — big win over
+# slower / more distant connections. No-op if Flask-Compress isn't installed.
+try:
+    from flask_compress import Compress
+    Compress(app)
+except Exception:
+    pass
+
 # Don't let browsers cache HTML pages, so a new deploy shows up on a normal
 # refresh instead of serving a stale cached page. Static assets are unaffected.
 @app.after_request
@@ -562,22 +570,21 @@ def serialize_messages(msgs):
     return out
 
 def get_seen_state(chat_type, chat_id, me_id):
-    """Return {reader_id: {'name': str, 'last_read_id': int}} for everyone
-    (other than the current user) who has read messages in this chat."""
-    msg_ids = [row.id for row in base_chat_query(chat_type, chat_id, me_id).with_entities(Message.id).all()]
-    if not msg_ids:
-        return {}
-    rows = (db.session.query(MessageRead.user_id, func.max(MessageRead.message_id))
-            .filter(MessageRead.message_id.in_(msg_ids))
-            .filter(MessageRead.user_id != me_id)
-            .group_by(MessageRead.user_id)
-            .all())
-    state = {}
-    for reader_id, last_read in rows:
-        reader = User.query.get(reader_id)
-        if reader:
-            state[reader_id] = {'name': reader.username, 'last_read_id': last_read}
-    return state
+    """Return {reader_id: {'name': str, 'last_read_id': int}} for everyone (other than
+    the current user) who has read messages in this chat. One JOIN aggregate instead
+    of loading every message id into a giant IN (...) clause."""
+    q = (db.session.query(MessageRead.user_id, func.max(MessageRead.message_id))
+         .join(Message, Message.id == MessageRead.message_id)
+         .filter(MessageRead.user_id != me_id))
+    if chat_type == 'dm':
+        q = q.filter(or_(and_(Message.sender_id == me_id, Message.receiver_id == chat_id),
+                         and_(Message.sender_id == chat_id, Message.receiver_id == me_id)))
+    else:
+        q = q.filter(Message.group_id == chat_id)
+    rows = q.group_by(MessageRead.user_id).all()
+    reader_ids = [r[0] for r in rows]
+    names = {u.id: u.username for u in User.query.filter(User.id.in_(reader_ids)).all()} if reader_ids else {}
+    return {rid: {'name': names.get(rid, '?'), 'last_read_id': last} for rid, last in rows}
 
 def unread_counts(me_id, group_ids):
     """Unread-message counts for ALL of a user's chats in two aggregate queries.
@@ -608,16 +615,12 @@ def unread_counts(me_id, group_ids):
     return dm_map, group_map
 
 def first_unread_id(chat_type, chat_id, me_id):
-    """Oldest message from others that the user hasn't read yet (for the 'New messages' divider)."""
-    ids = [r.id for r in base_chat_query(chat_type, chat_id, me_id)
-           .filter(Message.sender_id != me_id, Message.is_deleted == False, Message.is_system == False)
-           .with_entities(Message.id).all()]
-    if not ids:
-        return None
-    read = {r.message_id for r in MessageRead.query.filter(
-        MessageRead.user_id == me_id, MessageRead.message_id.in_(ids)).all()}
-    unread = [i for i in ids if i not in read]
-    return min(unread) if unread else None
+    """Oldest message from others that the user hasn't read yet (for the 'New messages'
+    divider). One indexed aggregate query instead of loading every id into Python."""
+    return (base_chat_query(chat_type, chat_id, me_id)
+            .filter(Message.sender_id != me_id, Message.is_deleted == False, Message.is_system == False,
+                    ~exists().where(and_(MessageRead.message_id == Message.id, MessageRead.user_id == me_id)))
+            .order_by(None).with_entities(func.min(Message.id)).scalar())
 
 def extract_mentions(content, group_id):
     """Return list of user ids mentioned via @username among the group's members.
