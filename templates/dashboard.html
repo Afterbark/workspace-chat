@@ -74,7 +74,7 @@
         }
     </script>
     <link rel="apple-touch-icon" href="/static/icon.svg">
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v=nebula-1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v=nebula-2">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@1/index.js"></script>
 </head>
@@ -93,7 +93,7 @@
         <button class="rail-btn" data-tip="Search messages" aria-label="Search messages" onclick="openSearch()">{{ ic('search') }}</button>
         <button class="rail-btn" data-tip="New group" aria-label="New group" onclick="openGroupModal()">{{ ic('usersplus') }}</button>
         {% if is_admin %}
-        <button class="rail-btn" id="requests-btn" data-tip="Approval requests" aria-label="Approval requests" onclick="openRequests()">{{ ic('bell') }}<span class="badge" id="requests-badge" style="display:none; background:var(--danger);">0</span></button>
+        <button class="rail-btn" id="requests-btn" data-tip="Approval requests" aria-label="Approval requests" onclick="openRequests()">{{ ic('bell') }}<span class="badge req-badge" id="requests-badge" style="display:none;">0</span></button>
         {% endif %}
         <div class="rail-spacer"></div>
         <button class="rail-btn" id="theme-btn" data-tip="Switch theme" aria-label="Switch theme" onclick="toggleTheme(event)">{{ ic('moon') }}</button>
@@ -151,6 +151,9 @@
                 </button>
                 <h1 class="side-title">Chats</h1>
                 <button class="icon-btn mobile-only" aria-label="Jump to a chat" onclick="openCmdk()">{{ ic('search') }}</button>
+                {% if is_admin %}
+                <button class="icon-btn mobile-only req-btn" aria-label="Approval requests" onclick="openRequests()">{{ ic('bell') }}<span class="badge req-badge" style="display:none;">0</span></button>
+                {% endif %}
                 <button class="icon-btn mobile-only" aria-label="Settings" onclick="openSettings()">{{ ic('settings') }}</button>
                 <button class="icon-btn solid" title="New group" aria-label="New group" onclick="openGroupModal()">{{ ic('compose') }}</button>
             </div>
@@ -367,6 +370,7 @@
             {% if is_admin %}
             <div class="settings-row">
                 <label>Admin</label>
+                <button class="modal-btn ghost" style="width:100%; margin-bottom:8px;" onclick="document.getElementById('settingsModal').style.display='none'; openRequests();">Approval requests <span class="req-count"></span></button>
                 <button class="modal-btn primary" style="width:100%;" onclick="openAdminDashboard()">Open admin dashboard</button>
             </div>
             <div class="settings-row">
@@ -1668,10 +1672,12 @@
 
         /* ---------- admin approval inbox ---------- */
         function renderRequestsBadge() {
-            const b = document.getElementById('requests-badge');
-            if (!b) return;
-            if (pendingRequests.length) { b.textContent = pendingRequests.length; b.style.display = 'inline-block'; }
-            else b.style.display = 'none';
+            const n = pendingRequests.length;
+            document.querySelectorAll('.req-badge').forEach(b => {
+                b.textContent = n;
+                b.style.display = n ? 'inline-block' : 'none';
+            });
+            document.querySelectorAll('.req-count').forEach(c => { c.textContent = n ? `(${n})` : ''; });
         }
         function renderRequestsList() {
             const box = document.getElementById('requests-list');
@@ -1699,7 +1705,7 @@
             if (data.request && !pendingRequests.some(r => r.id === data.request.id)) pendingRequests.unshift(data.request);
             renderRequestsBadge();
             const lbl = data.request.kind === 'signup' ? 'New account' : 'Password reset';
-            showToast('Approval needed', `${lbl}: ${data.request.username}`, true);
+            showToast('Approval needed', `${lbl}: ${data.request.username}`, true, { onClick: openRequests });
             playNotif(true);
             if (document.getElementById('requestsModal').style.display === 'block') renderRequestsList();
         });
@@ -3067,6 +3073,7 @@
                 { label: dark ? 'Switch to light mode' : 'Switch to dark mode', icon: dark ? 'sun' : 'moon', kw: 'theme appearance night day', run: () => toggleTheme() },
                 { label: 'Set your status', icon: 'sparkles', kw: 'availability busy away dnd do not disturb', run: () => toggleStatusMenu(null) },
                 { label: 'Settings', icon: 'settings', kw: 'preferences account password sound notifications', run: openSettings },
+                ...(IS_ADMIN ? [{ label: 'Approval requests', icon: 'bell', kw: 'approve decline admin signup new account password reset pending', run: openRequests }] : []),
                 ...ACCENTS.map(a => ({ label: `${a.label} accent`, swatch: a.c, kw: 'accent color colour palette theme', run: () => setAccent(a.key) })),
                 { label: 'Log out', icon: 'logout', kw: 'sign out exit', run: () => { location.href = '/logout'; } },
             ];
