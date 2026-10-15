@@ -5,44 +5,73 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Workspace Chat</title>
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#2563eb">
+    <meta name="theme-color" content="#0a0f1c">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Manrope:wght@400;500;600;700;800&display=swap">
+    <script>
+        // Runs before first paint: pick the saved theme, else follow the device, so dark users never see a white flash.
+        (function () {
+            let t = null;
+            try { t = localStorage.getItem('theme'); } catch (e) {}
+            if (t !== 'light' && t !== 'dark') t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', t);
+        })();
+        // Defined up front: <img onerror> handlers can fire before the main script has loaded.
+        function initialsAvatar(name) { return '/avatar?name=' + encodeURIComponent(name || '?'); }
+        function avatarFallback(img) {
+            img.onerror = null;
+            img.src = initialsAvatar(img.getAttribute('data-uname') || 'User');
+        }
+    </script>
     <link rel="apple-touch-icon" href="/static/icon.svg">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@1/index.js"></script>
     <style>
+        /* Aurora: glass panels floating over a slow-moving northern-lights wash.
+           Light = "daybreak", dark = "night sky". Every color below is a token. */
         :root {
             color-scheme: light;
-            --bg: #eef1f6; --panel: #ffffff; --sidebar: #fbfcfe;
-            --accent: #2563eb; --accent-hover: #1d4ed8; --accent-soft: #eaf1ff;
-            --own-bubble: #2563eb; --other-bubble: #ffffff;
-            --text: #0f172a; --text-soft: #64748b; --border: #e7eaf0; --border-strong: #d4dae4;
-            --danger: #ef4444; --green: #22c55e; --amber: #f59e0b;
-            --shadow-sm: 0 1px 2px rgba(15,23,42,.05);
-            --shadow: 0 1px 3px rgba(15,23,42,.07), 0 1px 2px rgba(15,23,42,.04);
-            --shadow-md: 0 6px 18px rgba(15,23,42,.09);
-            --shadow-lg: 0 16px 40px rgba(15,23,42,.16);
-            --own-text: #ffffff;
-            --r-sm: 10px; --r-md: 14px; --r-lg: 18px; --r-xl: 24px;
+            --bg: #eef2f7; --panel: #ffffff; --panel-solid: #ffffff; --sidebar: rgba(255,255,255,.62);
+            --glass: rgba(255,255,255,.66); --glass-strong: rgba(255,255,255,.84);
+            --accent: #0b8f80; --accent-hover: #087567; --accent-soft: rgba(11,143,128,.11); --on-accent: #ffffff;
+            --accent-2: #3d6be6;
+            --grad: linear-gradient(135deg, #0fa392 0%, #2f8fd8 55%, #4a68ea 100%);
+            --own-bubble: var(--grad); --other-bubble: rgba(255,255,255,.92); --own-text: #ffffff;
+            --text: #0d1726; --text-soft: #5b6a80; --border: rgba(16,32,64,.09); --border-strong: rgba(16,32,64,.17);
+            --danger: #e5484d; --green: #12a150; --amber: #d98b06;
+            --aura-1: rgba(16,190,165,.26); --aura-2: rgba(74,104,234,.20); --aura-3: rgba(236,98,152,.14);
+            --shadow-sm: 0 1px 2px rgba(16,32,64,.05);
+            --shadow: 0 2px 6px rgba(16,32,64,.06), 0 1px 2px rgba(16,32,64,.04);
+            --shadow-md: 0 10px 28px -6px rgba(16,32,64,.16);
+            --shadow-lg: 0 24px 60px -12px rgba(16,32,64,.28);
+            --own-glow: 0 10px 24px -12px rgba(15,140,170,.65);
+            --font: 'Manrope', system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans Arabic', Arial, sans-serif;
+            --font-display: 'Bricolage Grotesque', 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+            --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-xl: 26px;
         }
         [data-theme="dark"] {
             color-scheme: dark;
-            --bg: #0b1220; --panel: #161f31; --sidebar: #0f1626;
-            --accent: #4f8cff; --accent-hover: #6b9dff; --accent-soft: #1d3158;
-            --own-bubble: #2f6bdf; --other-bubble: #1c2740;
-            --text: #e8ecf4; --text-soft: #93a1b8; --border: #283450; --border-strong: #344160;
-            --danger: #f87171; --green: #34d399; --amber: #fbbf24;
+            --bg: #070b15; --panel: #121a2d; --panel-solid: #121a2d; --sidebar: rgba(10,15,28,.55);
+            --glass: rgba(13,19,35,.58); --glass-strong: rgba(16,23,41,.86);
+            --accent: #3ee0c5; --accent-hover: #6ff0da; --accent-soft: rgba(62,224,197,.13); --on-accent: #032620;
+            --accent-2: #6f8bff;
+            --grad: linear-gradient(135deg, #0fb5a0 0%, #2b8fe0 55%, #5b6cf5 100%);
+            --own-bubble: var(--grad); --other-bubble: rgba(28,38,62,.78); --own-text: #ffffff;
+            --text: #e7edf8; --text-soft: #8e9bb3; --border: rgba(255,255,255,.075); --border-strong: rgba(255,255,255,.15);
+            --danger: #ff6b70; --green: #3ddc97; --amber: #ffbf47;
+            --aura-1: rgba(22,206,176,.34); --aura-2: rgba(92,96,255,.30); --aura-3: rgba(232,78,150,.22);
             --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
-            --shadow: 0 1px 3px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.3);
-            --shadow-md: 0 6px 20px rgba(0,0,0,.5);
-            --shadow-lg: 0 18px 44px rgba(0,0,0,.6);
-            --own-text: #ffffff;
-            --r-sm: 10px; --r-md: 14px; --r-lg: 18px; --r-xl: 24px;
+            --shadow: 0 2px 8px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.3);
+            --shadow-md: 0 12px 32px -8px rgba(0,0,0,.6);
+            --shadow-lg: 0 28px 70px -14px rgba(0,0,0,.75);
+            --own-glow: 0 12px 28px -12px rgba(30,170,200,.7);
         }
         * { box-sizing: border-box; }
         html, body { height: 100%; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-            background: var(--bg); margin: 0; display: flex; height: 100vh; color: var(--text);
+            font-family: var(--font);
+            background: var(--bg); margin: 0; display: flex; height: 100vh; height: 100dvh; color: var(--text);
             overflow: hidden; transition: background .25s, color .25s;
             -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
             text-rendering: optimizeLegibility; letter-spacing: -.01em;
@@ -558,6 +587,221 @@
         .message-row.mine .vp-wave i.on { background: #fff; opacity: 1; }
         .vp-time { font-size: 11px; color: var(--text-soft); flex-shrink: 0; min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
         .message-row.mine .vp-time { color: rgba(255,255,255,.85); }
+
+        /* ================= Aurora layer ================= */
+        /* Ambient northern-lights wash behind everything. */
+        body::before {
+            content: ''; position: fixed; inset: -25%; z-index: 0; pointer-events: none;
+            background:
+                radial-gradient(38% 42% at 18% 22%, var(--aura-1), transparent 70%),
+                radial-gradient(34% 40% at 82% 18%, var(--aura-2), transparent 70%),
+                radial-gradient(40% 44% at 70% 88%, var(--aura-3), transparent 72%),
+                radial-gradient(30% 34% at 28% 86%, var(--aura-2), transparent 70%);
+            filter: blur(40px) saturate(120%);
+            animation: auroraDrift 36s ease-in-out infinite alternate;
+        }
+        @keyframes auroraDrift {
+            0%   { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+            50%  { transform: translate3d(3%, -2%, 0) rotate(6deg) scale(1.06); }
+            100% { transform: translate3d(-3%, 2%, 0) rotate(-4deg) scale(1.02); }
+        }
+        .sidebar, .chat-area { position: relative; z-index: 1; }
+        .ic { pointer-events: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8;
+            stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; display: block; }
+        :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
+        button { font-family: inherit; }
+
+        /* ---- sidebar ---- */
+        .sidebar { background: var(--sidebar); border-right: 1px solid var(--border);
+            backdrop-filter: blur(22px) saturate(150%); -webkit-backdrop-filter: blur(22px) saturate(150%); }
+        .sidebar-header { background: transparent; border-bottom: 1px solid var(--border); padding: 18px 16px 16px; }
+        .sidebar-profile-pic { width: 48px; height: 48px; box-shadow: 0 0 0 2px var(--panel-solid), 0 0 0 4px var(--accent-soft); }
+        .me-name { font-family: var(--font-display); font-weight: 700; font-size: 17px; letter-spacing: -.02em;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .photo-link { display: inline-flex; align-items: center; gap: 5px; color: var(--text-soft); font-weight: 600; margin-top: 2px; }
+        .photo-link .ic { width: 14px; height: 14px; }
+        .photo-link:hover { color: var(--accent); text-decoration: none; }
+        .icon-btn { background: transparent; color: var(--text-soft); width: 38px; height: 38px; flex-shrink: 0; }
+        .icon-btn:hover { background: var(--accent-soft); color: var(--accent); }
+        .search-wrap { padding: 12px 14px 6px; }
+        .search-wrap input { background: var(--accent-soft); background: color-mix(in srgb, var(--panel-solid) 55%, transparent);
+            border: 1px solid var(--border); border-radius: 999px; padding: 10px 16px; }
+        .section-title { font-family: var(--font); font-size: 10.5px; letter-spacing: .14em; font-weight: 800; padding: 16px 20px 8px; }
+        .item { margin: 2px 10px; padding: 8px 10px; border-radius: 16px; transition: background .15s, transform .15s; }
+        .item:hover { background: var(--accent-soft); }
+        .item.active { background: var(--glass-strong); box-shadow: var(--shadow); }
+        .item.active .name { color: var(--text); }
+        .item.active .profile-pic, .item.active .group-ic { box-shadow: 0 0 0 2px var(--panel-solid), 0 0 0 4px var(--accent); }
+        .item .profile-pic, .item .group-ic { transition: box-shadow .2s; }
+        .item .name { font-weight: 700; font-size: 14.5px; }
+        .item .group-ic { border-radius: 14px; background: var(--grad); color: #fff; font-family: var(--font-display); }
+        .avatar-wrap.gav .profile-pic { border-radius: 14px; }
+        .dot { border-color: var(--panel-solid); width: 13px; height: 13px; }
+        .self-ic { background: var(--panel-solid); border-color: var(--panel-solid); }
+        .badge { background: var(--grad); color: #fff; box-shadow: 0 4px 10px -4px rgba(20,140,180,.7); }
+        .sidebar-foot { display: flex; gap: 8px; padding: 12px 14px 14px; border-top: 1px solid var(--border); }
+        .create-btn { flex: 1; margin: 0; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            background: var(--grad); color: #fff; border-radius: 999px; font-weight: 700; padding: 11px 14px;
+            box-shadow: var(--own-glow); }
+        .create-btn .ic { width: 18px; height: 18px; stroke-width: 2.2; }
+        .create-btn:hover { background: var(--grad); filter: brightness(1.08); }
+        .logout-btn { margin: 0; padding: 0; width: 44px; height: 44px; flex-shrink: 0; display: inline-flex; align-items: center;
+            justify-content: center; border-radius: 50%; color: var(--text-soft); border: 1px solid var(--border); }
+        .logout-btn:hover { color: var(--danger); border-color: var(--danger); background: transparent; }
+        #status-menu { background: var(--panel-solid); top: 76px; }
+
+        /* ---- chat header ---- */
+        .chat-area { background: transparent; }
+        .chat-header { background: var(--glass); border-bottom: 1px solid var(--border); min-height: 68px; padding: 12px 20px;
+            backdrop-filter: blur(22px) saturate(150%); -webkit-backdrop-filter: blur(22px) saturate(150%); }
+        .chat-header .h-text { min-width: 0; }
+        .chat-header .h-title { font-family: var(--font-display); font-weight: 700; font-size: 19px; letter-spacing: -.025em;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chat-header .h-avatar { width: 42px; height: 42px; }
+        .chat-header .h-sub.online::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+            background: var(--green); margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent); }
+        .hamburger { color: var(--text); padding: 6px; border-radius: 10px; }
+        .action-btn { display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; padding: 8px 14px; }
+        .action-btn .ic { width: 16px; height: 16px; }
+        .btn-light { background: var(--accent-soft); color: var(--text); }
+        #pinned-banner { background: var(--glass); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+        #pinned-banner .pin-ic { display: inline-flex; }
+
+        /* ---- conversation ---- */
+        #chat-box { padding: 26px max(20px, 7%) 18px; scroll-behavior: auto; }
+        .date-sep, .system-msg { background: var(--glass-strong); border: 1px solid var(--border); box-shadow: none;
+            backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+        .date-sep { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 800; padding: 5px 14px; }
+        .bubble { background: var(--other-bubble); border: 1px solid var(--border); border-radius: 20px; border-top-left-radius: 6px;
+            box-shadow: var(--shadow-sm); padding: 9px 14px 7px; }
+        .message-row.grouped .bubble { border-top-left-radius: 20px; }
+        .message-row.mine .bubble { background: var(--own-bubble); border: 1px solid rgba(255,255,255,.08);
+            border-radius: 20px; border-top-right-radius: 6px; box-shadow: var(--own-glow); }
+        .message-row.mine.grouped .bubble { border-top-right-radius: 20px; }
+        .bubble .sender { font-weight: 800; letter-spacing: -.005em; }
+        .bubble .text { font-size: 14.5px; line-height: 1.45; }
+        .bubble .time { font-variant-numeric: tabular-nums; }
+        .bubble a.msg-link { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; overflow-wrap: anywhere; }
+        .message-row.mine .bubble a.msg-link { color: #fff; }
+        .bubble a.file-chip { gap: 8px; align-items: center; max-width: 100%; }
+        .bubble a.file-chip .ic { width: 18px; height: 18px; }
+        .bubble a.file-chip .fc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .bubble img.chat-img, .bubble video { border-radius: 14px; max-width: min(300px, 100%); }
+        .reply-quote { background: var(--accent-soft); border-left-color: var(--accent); border-radius: 10px; }
+        .reply-quote .rq-sender { color: var(--accent); }
+        .reaction-chip { background: var(--glass-strong); border-color: var(--border); padding: 2px 9px; }
+        .reaction-chip.mine { background: var(--accent-soft); border-color: var(--accent); }
+        .msg-actions { background: var(--panel-solid); border: 1px solid var(--border); border-radius: 999px; padding: 3px;
+            box-shadow: var(--shadow-md); gap: 0; }
+        .msg-actions button { background: transparent; border: none; box-shadow: none; width: 30px; height: 30px; color: var(--text-soft); }
+        .msg-actions button .ic { width: 16px; height: 16px; }
+        .msg-actions button:hover { background: var(--accent-soft); color: var(--accent); }
+        .praise-card { background: var(--glass-strong); border: 1px solid var(--border); border-radius: 20px; position: relative; overflow: hidden; }
+        .praise-card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--grad); }
+        .praise-card .pc-label { font-family: var(--font-display); }
+        .mention { background: var(--accent-soft); color: var(--accent); }
+        .mention.me { background: color-mix(in srgb, var(--amber) 28%, transparent); color: var(--text); }
+        .seen-av { box-shadow: 0 0 0 2px var(--panel-solid); }
+        .unread-divider { color: var(--accent); }
+        .typing-bubble { background: var(--other-bubble); border-radius: 20px; border-top-left-radius: 6px; }
+        .typing-bubble span { background: var(--accent); }
+        .vp-play { background: var(--grad); color: #fff; }
+        .vp-wave i.on { background: var(--accent); }
+        @keyframes msgIn { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+        .message-row.msg-in { animation: msgIn .26s cubic-bezier(.2,.9,.3,1.2); }
+
+        /* ---- empty state: drifting aurora orb ---- */
+        .empty-state { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+        .empty-state .es-title { font-family: var(--font-display); font-size: clamp(24px, 4vw, 34px); font-weight: 800;
+            letter-spacing: -.035em; color: var(--text); margin-top: 18px; text-wrap: balance; }
+        .empty-state .es-sub { font-size: 14.5px; color: var(--text-soft); max-width: 32ch; text-wrap: balance; }
+        .orb { position: relative; width: 150px; height: 150px; }
+        .orb span { position: absolute; inset: 0; border-radius: 50%; filter: blur(14px); opacity: .9;
+            animation: orbSpin 14s linear infinite; }
+        .orb span:nth-child(1) { background: radial-gradient(circle at 30% 30%, #19d3b5, transparent 62%); }
+        .orb span:nth-child(2) { background: radial-gradient(circle at 70% 40%, #5b6cf5, transparent 60%); animation-duration: 18s; animation-direction: reverse; }
+        .orb span:nth-child(3) { background: radial-gradient(circle at 50% 75%, #ec6298, transparent 58%); animation-duration: 22s; }
+        .orb::after { content: ''; position: absolute; inset: 34%; border-radius: 50%; background: var(--panel-solid);
+            box-shadow: 0 0 40px 6px color-mix(in srgb, var(--accent) 35%, transparent); opacity: .9; }
+        @keyframes orbSpin { to { transform: rotate(360deg); } }
+
+        /* ---- composer: floating glass dock ---- */
+        .input-area { background: transparent; border-top: none; padding: 0 max(14px, 4%) 16px; }
+        .input-controls { background: var(--glass-strong); border: 1px solid var(--border); border-radius: 28px; padding: 6px;
+            gap: 2px; align-items: flex-end; box-shadow: var(--shadow-md);
+            backdrop-filter: blur(22px) saturate(150%); -webkit-backdrop-filter: blur(22px) saturate(150%);
+            transition: border-color .2s, box-shadow .2s; }
+        .input-controls:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+            box-shadow: var(--shadow-md), 0 0 0 4px var(--accent-soft); }
+        .compose-btn { background: transparent; color: var(--text-soft); width: 42px; height: 42px; display: inline-flex;
+            align-items: center; justify-content: center; }
+        #attach-btn { background: transparent; color: var(--text-soft); }
+        .compose-btn:hover, #attach-btn:hover { background: var(--accent-soft); color: var(--accent); }
+        .input-controls:has(#message-input:disabled) { opacity: .6; box-shadow: none; }
+        .compose-btn.recording { background: var(--danger); color: #fff; }
+        #plus-btn .ic { stroke-width: 2.2; }
+        #message-input { flex: 1; min-width: 0; resize: none; border: none; background: transparent; box-shadow: none;
+            padding: 11px 8px; font: inherit; font-size: 15px; line-height: 1.4; max-height: 160px; overflow-y: auto;
+            border-radius: 0; color: var(--text); }
+        #message-input:focus { border: none; box-shadow: none; }
+        #message-input::placeholder { color: var(--text-soft); }
+        #send-btn { width: 44px; height: 42px; padding: 0; border-radius: 22px; background: var(--grad); color: #fff;
+            display: inline-flex; align-items: center; justify-content: center; box-shadow: var(--own-glow); }
+        #send-btn .ic { width: 19px; height: 19px; margin-left: -2px; }
+        #send-btn:hover { background: var(--grad); filter: brightness(1.08); }
+        #send-btn:disabled { box-shadow: none; }
+        #mic-btn:disabled, #emoji-btn:disabled, #plus-btn:disabled { opacity: .45; cursor: not-allowed; }
+        #mention-box, #slash-box, #composer-menu, #emoji-picker { bottom: calc(100% + 8px); }
+        #mention-box, #slash-box, #composer-menu { left: max(14px, 4%); }
+        #emoji-picker { left: auto; right: max(14px, 4%); }
+        #attachment-preview, #composer-context, #priority-chip { background: var(--glass-strong); border-radius: 16px;
+            backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+        #new-msg-pill { background: var(--grad); bottom: 92px; }
+
+        /* ---- popovers, modals, toasts ---- */
+        .modal { background: rgba(5,10,20,.45); }
+        .modal-content { background: var(--panel-solid); border-radius: 26px; }
+        .modal-content h3 { font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: -.03em; }
+        .modal-content input[type="password"], .modal-content input[type="search"], .modal-content input[type="datetime-local"],
+        .modal-content textarea { width: 100%; padding: 11px 14px; margin-bottom: 10px; border: 1px solid var(--border);
+            border-radius: var(--r-md); font: inherit; font-size: 14px; background: var(--bg); color: var(--text); outline: none;
+            transition: border-color .15s, box-shadow .15s; }
+        .modal-content input[type="password"]:focus, .modal-content input[type="search"]:focus, .modal-content input[type="datetime-local"]:focus,
+        .modal-content textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+        .modal-btn { border-radius: 999px; }
+        .modal-btn.primary { background: var(--grad); color: #fff; }
+        .modal-btn.primary:hover { background: var(--grad); filter: brightness(1.08); }
+        .admin-tab.active { background: var(--grad); }
+        .toast { background: var(--panel-solid); border-left: none; border-radius: 16px; border: 1px solid var(--border);
+            position: relative; overflow: hidden; padding-left: 20px; }
+        .toast::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--grad); }
+        .toast.mention::before { background: var(--amber); }
+        #chat-menu, #composer-menu, #mention-box, #slash-box, #react-palette, #hover-card { background: var(--panel-solid); }
+        #delete-group-btn { background: color-mix(in srgb, var(--danger) 12%, transparent) !important; }
+
+        @media (max-width: 768px) {
+            .sidebar { position: fixed; z-index: 100; width: min(320px, 86vw); background: var(--glass-strong); }
+            .hamburger { display: inline-flex; }
+            .chat-header { padding: 10px 12px; gap: 10px; min-height: 60px; }
+            .chat-header .h-title { font-size: 17px; }
+            .action-btn .ab-label { display: none; }
+            .action-btn { padding: 8px; }
+            #chat-box { padding: 16px 12px; }
+            .input-area { padding: 0 8px calc(8px + env(safe-area-inset-bottom, 0px)); }
+            .compose-btn { width: 38px; height: 40px; }
+            #emoji-btn { display: none; }
+            #send-btn { width: 42px; height: 40px; }
+            #mention-box, #slash-box, #composer-menu { left: 8px; right: 8px; }
+            .message-row { max-width: 90%; }
+            .msg-actions { position: absolute; top: -34px; right: 0; z-index: 5; display: none; }
+            .message-row:not(.mine) .msg-actions { left: 38px; right: auto; }
+            .message-row:hover .msg-actions, .message-row:focus-within .msg-actions { display: flex; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            body::before, .orb span { animation: none; }
+            .message-row.msg-in { animation: none; }
+        }
     </style>
 </head>
 <body>
@@ -569,7 +813,7 @@
 
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
-            {% set my_avatar = current_user.profile_pic if current_user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + current_user.profile_pic) if current_user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + current_user.username + '&background=2563eb&color=fff') %}
+            {% set my_avatar = avatar_url(current_user.profile_pic, current_user.username) %}
             <span class="avatar-wrap">
                 <img src="{{ my_avatar }}" class="sidebar-profile-pic" data-uname="{{ current_user.username }}" onerror="avatarFallback(this)">
                 <span class="dot on" id="my-dot"></span>
@@ -582,7 +826,7 @@
                 <form action="/upload_profile" method="POST" enctype="multipart/form-data" id="upload-form">
                     <label class="photo-link">
                         <input type="file" name="file" style="display:none;" onchange="document.getElementById('upload-form').submit();" accept="image/*">
-                        Change photo
+                        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/></svg> Change photo
                     </label>
                 </form>
             </div>
@@ -610,23 +854,23 @@
                 </div>
             </div>
             {% if is_admin %}
-            <button class="icon-btn" id="requests-btn" title="Approval requests" onclick="openRequests()" style="position:relative;">&#128276;<span class="badge" id="requests-badge" style="position:absolute; top:-3px; right:-3px; display:none; background:var(--danger);">0</span></button>
+            <button class="icon-btn" id="requests-btn" title="Approval requests" aria-label="Approval requests" onclick="openRequests()" style="position:relative;"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span class="badge" id="requests-badge" style="position:absolute; top:-3px; right:-3px; display:none; background:var(--danger);">0</span></button>
             {% endif %}
-            <button class="icon-btn" title="Settings" onclick="openSettings()">&#9881;</button>
-            <button class="icon-btn" id="theme-btn" title="Toggle theme" onclick="toggleTheme()">&#127769;</button>
+            <button class="icon-btn" title="Settings" aria-label="Settings" onclick="openSettings()"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+            <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme" onclick="toggleTheme()"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
         </div>
 
         <div class="search-wrap">
             <input type="search" id="filter-input" name="conversation-filter" placeholder="Filter conversations..."
                    autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
                    readonly onfocus="this.removeAttribute('readonly')" oninput="filterChats(this.value)">
-            <button class="icon-btn" title="Search messages" onclick="openSearch()">&#128269;</button>
+            <button class="icon-btn" title="Search messages" aria-label="Search messages" onclick="openSearch()"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
         </div>
 
         <div class="list-scroll">
             <div class="section-title">Direct Messages</div>
             <div id="dm-list">
-                {% set self_avatar = current_user.profile_pic if current_user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + current_user.profile_pic) if current_user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + current_user.username + '&background=2563eb&color=fff') %}
+                {% set self_avatar = avatar_url(current_user.profile_pic, current_user.username) %}
                 <div class="item chat-nav" id="nav-dm-{{ current_user.id }}" data-name="saved messages you {{ current_user.username|lower }}" onclick="openChat('dm', {{ current_user.id }}, 'Saved messages')">
                     <span class="avatar-wrap">
                         <img src="{{ self_avatar }}" class="profile-pic" data-profile-id="{{ current_user.id }}" data-uname="{{ current_user.username }}" onerror="avatarFallback(this)">
@@ -635,8 +879,8 @@
                     <span class="name">Saved messages <small style="color:var(--text-soft); font-weight:500;">(you)</small></span>
                 </div>
                 {% for user in users %}
-                    {% set avatar = user.profile_pic if user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=2563eb&color=fff') %}
-                    <div class="item chat-nav" id="nav-dm-{{ user.id }}" data-name="{{ user.username|lower }}" onclick="openChat('dm', {{ user.id }}, '{{ user.username }}')">
+                    {% set avatar = avatar_url(user.profile_pic, user.username) %}
+                    <div class="item chat-nav" id="nav-dm-{{ user.id }}" data-name="{{ user.username|lower }}" data-title="{{ user.username }}" onclick="openChat('dm', {{ user.id }}, this.dataset.title)">
                         <span class="avatar-wrap">
                             <img src="{{ avatar }}" class="profile-pic" data-profile-id="{{ user.id }}" data-uname="{{ user.username }}" onerror="avatarFallback(this)">
                             <span class="dot" id="dot-{{ user.id }}"></span>
@@ -650,7 +894,7 @@
             <div class="section-title">Group Chats</div>
             <div id="group-list">
                 {% for group in groups %}
-                    <div class="item chat-nav" id="nav-group-{{ group.id }}" data-name="{{ group.name|lower }}" onclick="openChat('group', {{ group.id }}, '{{ group.name }}')">
+                    <div class="item chat-nav" id="nav-group-{{ group.id }}" data-name="{{ group.name|lower }}" data-title="{{ group.name }}" onclick="openChat('group', {{ group.id }}, this.dataset.title)">
                         <span class="avatar-wrap gav" id="gav-{{ group.id }}">
                             {% if group.photo and group.photo not in ['default', None] %}
                                 <img src="{{ group.photo }}" class="profile-pic" data-uname="{{ group.name }}" onerror="avatarFallback(this)">
@@ -668,22 +912,24 @@
             <div id="archived-section"></div>
         </div>
 
-        <button class="create-btn" onclick="document.getElementById('groupModal').style.display='block'">+ New Group</button>
-        <a href="/logout" class="logout-btn">Logout</a>
+        <div class="sidebar-foot">
+            <button class="create-btn" onclick="document.getElementById('groupModal').style.display='block'"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg> New group</button>
+            <a href="/logout" class="logout-btn" title="Log out" aria-label="Log out"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg></a>
+        </div>
     </div>
     <div class="sidebar-overlay" onclick="toggleSidebar(false)"></div>
 
     <div class="chat-area">
         <div class="chat-header">
-            <button class="hamburger" onclick="toggleSidebar(true)">&#9776;</button>
+            <button class="hamburger" onclick="toggleSidebar(true)" aria-label="Open conversations"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
             <img src="" id="header-avatar" class="h-avatar" style="display:none;" onerror="avatarFallback(this)">
-            <div>
+            <div class="h-text">
                 <div class="h-title" id="chat-title">Select a chat to begin</div>
                 <div class="h-sub" id="chat-subtitle"></div>
             </div>
             <div id="header-actions"></div>
             <div class="menu-wrap" id="menu-wrap" style="display:none;">
-                <button class="icon-btn" onclick="toggleChatMenu(event)">&#8942;</button>
+                <button class="icon-btn" onclick="toggleChatMenu(event)" aria-label="Chat options"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></button>
                 <div id="chat-menu"></div>
             </div>
         </div>
@@ -696,8 +942,9 @@
 
         <div id="chat-box">
             <div class="empty-state" id="empty-state">
-                <div class="big">&#128172;</div>
-                <div>Pick a conversation to start chatting.</div>
+                <div class="orb" aria-hidden="true"><span></span><span></span><span></span></div>
+                <div class="es-title">Hey {{ current_user.username }}</div>
+                <div class="es-sub">Pick a conversation on the left, or start a new group.</div>
             </div>
         </div>
         <div id="drop-overlay">Drop to send file</div>
@@ -733,12 +980,12 @@
             <div id="priority-chip"><span id="pc-text"></span><button class="pc-x" onclick="setPriority('normal')" title="Remove priority">&times;</button></div>
             <div class="input-controls">
                 <input type="file" id="chat-file-input" onchange="handleFiles(this.files)">
-                <button id="plus-btn" class="compose-btn" onclick="toggleComposerMenu()" disabled title="More — GIF, schedule, praise, priority" style="font-weight:800; font-size:20px;">+</button>
-                <button id="attach-btn" class="compose-btn" onclick="document.getElementById('chat-file-input').click();" disabled title="Attach file">&#128206;</button>
-                <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled title="Emoji">&#128512;</button>
-                <button id="mic-btn" class="compose-btn" onclick="toggleRecording()" disabled title="Record voice message">&#127908;</button>
-                <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off" disabled>
-                <button id="send-btn" onclick="sendMessage()" disabled>Send</button>
+                <button id="plus-btn" class="compose-btn" onclick="toggleComposerMenu()" disabled title="More: GIF, schedule, praise, priority" aria-label="More options"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+                <button id="attach-btn" class="compose-btn" onclick="document.getElementById('chat-file-input').click();" disabled title="Attach file" aria-label="Attach file"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+                <textarea id="message-input" rows="1" dir="auto" placeholder="Write a message…" autocomplete="off" disabled></textarea>
+                <button id="emoji-btn" class="compose-btn" onclick="toggleEmojiPicker()" disabled title="Emoji" aria-label="Emoji"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/></svg></button>
+                <button id="mic-btn" class="compose-btn" onclick="toggleRecording()" disabled title="Record voice message" aria-label="Record voice message"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg></button>
+                <button id="send-btn" onclick="sendMessage()" disabled title="Send (Enter)" aria-label="Send"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg></button>
             </div>
         </div>
     </div>
@@ -831,7 +1078,7 @@
                         {% if u.id != current_user.id %}
                         <div class="admin-user-row" id="admin-user-{{ u.id }}" style="display:flex; align-items:center; gap:10px; padding:9px 12px; border-bottom:1px solid var(--border);">
                             <span style="flex:1; font-weight:600;">{{ u.username }}</span>
-                            <button class="remove-btn" onclick="adminDeleteUser({{ u.id }}, '{{ u.username }}')">Delete</button>
+                            <button class="remove-btn" data-title="{{ u.username }}" onclick="adminDeleteUser({{ u.id }}, this.dataset.title)">Delete</button>
                         </div>
                         {% endif %}
                     {% endfor %}
@@ -906,21 +1153,23 @@
     </div>
 
     <script>
+        const ICON = {};
+        Object.entries({"settings": "<circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"/>", "sun": "<circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41\"/>", "moon": "<path d=\"M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z\"/>", "search": "<circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"m20 20-3.5-3.5\"/>", "bell": "<path d=\"M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9\"/><path d=\"M10.3 21a1.94 1.94 0 0 0 3.4 0\"/>", "plus": "<path d=\"M12 5v14M5 12h14\"/>", "clip": "<path d=\"m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48\"/>", "smile": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M8 14s1.5 2 4 2 4-2 4-2\"/><path d=\"M9 9h.01M15 9h.01\"/>", "mic": "<rect x=\"9\" y=\"2\" width=\"6\" height=\"12\" rx=\"3\"/><path d=\"M19 10v1a7 7 0 0 1-14 0v-1M12 18v4\"/>", "send": "<path d=\"M22 2 11 13\"/><path d=\"M22 2 15 22l-4-9-9-4 20-7z\"/>", "more": "<circle cx=\"12\" cy=\"5\" r=\"1\"/><circle cx=\"12\" cy=\"12\" r=\"1\"/><circle cx=\"12\" cy=\"19\" r=\"1\"/>", "menu": "<path d=\"M4 6h16M4 12h16M4 18h16\"/>", "reply": "<path d=\"M9 17 4 12l5-5\"/><path d=\"M20 18v-2a4 4 0 0 0-4-4H4\"/>", "forward": "<path d=\"m15 17 5-5-5-5\"/><path d=\"M4 18v-2a4 4 0 0 1 4-4h12\"/>", "pin": "<path d=\"M12 17v5\"/><path d=\"M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z\"/>", "edit": "<path d=\"M12 20h9\"/><path d=\"M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z\"/>", "trash": "<path d=\"M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6\"/>", "file": "<path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path d=\"M14 2v6h6\"/>", "users": "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75\"/>", "logout": "<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\"/><path d=\"m16 17 5-5-5-5M21 12H9\"/>", "camera": "<path d=\"M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z\"/><circle cx=\"12\" cy=\"13\" r=\"3.5\"/>"}).forEach(([k, v]) => { ICON[k] = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">' + v + '</svg>'; });
         const userAvatars = {
             {% for user in user_dict.values() %}
-                {{ user.id }}: "{{ user.profile_pic if user.profile_pic.startswith('http') else (url_for('static', filename='uploads/' + user.profile_pic) if user.profile_pic != 'default' else 'https://ui-avatars.com/api/?name=' + user.username + '&background=2563eb&color=fff') }}"{% if not loop.last %},{% endif %}
+                {{ user.id }}: {{ avatar_url(user.profile_pic, user.username)|tojson }}{% if not loop.last %},{% endif %}
             {% endfor %}
         };
         const groupPhotos = {
             {% for group in groups %}
-                {{ group.id }}: "{{ group.photo if (group.photo and group.photo not in ['default', None]) else '' }}"{% if not loop.last %},{% endif %}
+                {{ group.id }}: {{ (group.photo if (group.photo and group.photo not in ['default', None]) else '')|tojson }}{% if not loop.last %},{% endif %}
             {% endfor %}
         };
-        const VAPID_PUBLIC_KEY = "{{ vapid_public_key }}";
-        const GIPHY_API_KEY = "{{ giphy_api_key }}";
+        const VAPID_PUBLIC_KEY = {{ vapid_public_key|tojson }};
+        const GIPHY_API_KEY = {{ giphy_api_key|tojson }};
         const userNames = {
             {% for user in user_dict.values() %}
-                {{ user.id }}: "{{ user.username }}"{% if not loop.last %},{% endif %}
+                {{ user.id }}: {{ user.username|tojson }}{% if not loop.last %},{% endif %}
             {% endfor %}
         };
         const mutedChats = new Set({{ muted|tojson }});
@@ -939,7 +1188,7 @@
     <script>
         const socket = io();
         const myUserId = {{ current_user.id }};
-        let myUsername = "{{ current_user.username }}";
+        let myUsername = {{ current_user.username|tojson }};
         const REACT_EMOJIS = ['👍','❤️','😂','😮','😢','🎉'];
 
         let currentChatType = null, currentChatId = null;
@@ -956,14 +1205,18 @@
         /* ---------- theme ---------- */
         function applyTheme(t) {
             document.documentElement.setAttribute('data-theme', t);
-            document.getElementById('theme-btn').innerHTML = t === 'dark' ? '&#9728;' : '&#127769;';
+            const btn = document.getElementById('theme-btn');
+            btn.innerHTML = t === 'dark' ? ICON.sun : ICON.moon;
+            btn.title = t === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+            const meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.content = t === 'dark' ? '#0a0f1c' : '#eef2f7';
         }
         function toggleTheme() {
             const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
             try { localStorage.setItem('theme', next); } catch (e) {}
             applyTheme(next);
         }
-        (function () { let th = 'light'; try { th = localStorage.getItem('theme') || 'light'; } catch (e) {} applyTheme(th); })();
+        applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
 
         /* ---------- helpers ---------- */
         function escapeHtml(str) {
@@ -1005,6 +1258,12 @@
                 inlines.push(code);
                 return SEP + 'IC' + (inlines.length - 1) + SEP;
             });
+            // 2b. Links, pulled out the same way so "_" or "*" inside a URL is never read as emphasis.
+            const links = [];
+            s = s.replace(/https?:\/\/[^\s<>"]*[^\s<>".,:;'!?)\]]/g, url => {
+                links.push(url);
+                return SEP + 'LK' + (links.length - 1) + SEP;
+            });
             // 3. Escape the remaining text, then apply inline emphasis.
             s = escapeHtml(s);
             s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
@@ -1016,10 +1275,11 @@
             // 5. Restore code spans with their contents escaped.
             s = s.replace(/\uE000IC(\d+)\uE000/g, (m, i) => `<code class="inline-code">${escapeHtml(inlines[+i])}</code>`);
             s = s.replace(/\uE000CB(\d+)\uE000/g, (m, i) => `<pre class="code-block"><code>${escapeHtml(blocks[+i])}</code></pre>`);
+            s = s.replace(/\uE000LK(\d+)\uE000/g, (m, i) => `<a class="msg-link" href="${escapeHtml(links[+i])}" target="_blank" rel="noopener noreferrer">${escapeHtml(links[+i])}</a>`);
             return s;
         }
         function avatarFor(senderId, name) {
-            return userAvatars[senderId] || `https://ui-avatars.com/api/?name=${encodeURIComponent(name || '')}&background=2563eb&color=fff`;
+            return userAvatars[senderId] || initialsAvatar(name);
         }
         // Returns the emoji count if the text is ONLY emoji (1..8), else 0.
         function emojiOnlyCount(text) {
@@ -1037,12 +1297,6 @@
         }
         // When a stored photo 404s (e.g. an old local upload lost on restart),
         // fall back to a generated initials avatar instead of a broken image.
-        function avatarFallback(img) {
-            const n = img.getAttribute('data-uname') || 'User';
-            img.onerror = null;
-            img.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(n)}&background=2563eb&color=fff`;
-        }
-        window.avatarFallback = avatarFallback;
         const APP_TZ = 'Asia/Amman';
         function formatAmmanTime(iso) {
             if (!iso) return '';
@@ -1117,7 +1371,7 @@
         }
         function buildFileHtml(fileUrl, fileType, fileName) {
             if (!fileUrl) return '';
-            if (fileType === 'image') { const u = proxiedGif(fileUrl); return `<img src="${u}" class="chat-img" onclick="openLightbox('${u}')">`; }
+            if (fileType === 'image') { const u = escapeHtml(proxiedGif(fileUrl)); return `<img src="${u}" class="chat-img" loading="lazy" onclick="openLightbox(this.src)">`; }
             // Voice notes record as .webm (which the server tags as "video"), so detect
             // them by the "voice_" filename too and show the waveform player.
             if (fileType === 'audio' || (fileName && /^voice_/i.test(fileName))) {
@@ -1130,8 +1384,8 @@
                         onplay="voiceState(this,true)" onpause="voiceState(this,false)"></audio>
                 </div>`;
             }
-            if (fileType === 'video') return `<video controls><source src="${fileUrl}"></video>`;
-            return `<a class="file-chip" href="${fileUrl}" target="_blank" download="${escapeHtml(fileName)}">&#128206; ${escapeHtml(fileName)}</a>`;
+            if (fileType === 'video') return `<video controls preload="metadata"><source src="${escapeHtml(fileUrl)}"></video>`;
+            return `<a class="file-chip" href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener" download="${escapeHtml(fileName)}"><span class="fc-ic">${ICON.file}</span><span class="fc-name">${escapeHtml(fileName)}</span></a>`;
         }
 
         /* ---------- voice message player (waveform + scrubber) ---------- */
@@ -1248,7 +1502,7 @@
             const prioBanner = prio ? `<div class="priority-banner ${prio}">${prio === 'urgent' ? '‼️ URGENT' : '❗ IMPORTANT'}</div>` : '';
             const ec = (text && !msg.file_url && !msg.reply_to && !msg.forwarded && !prio) ? emojiOnlyCount(text) : 0;
             const emjCls = ec ? ` emoji-only ${ec <= 1 ? 'emj1' : (ec <= 3 ? 'emj2' : 'emj3')}` : '';
-            const textHtml = text ? `<div class="text${emjCls}">${ec ? escapeHtml(text) : formatRich(text)}</div>` : '';
+            const textHtml = text ? `<div class="text${emjCls}" dir="auto">${ec ? escapeHtml(text) : formatRich(text)}</div>` : '';
             const fileHtml = buildFileHtml(msg.file_url, msg.file_type, msg.file_name);
             const editedTag = msg.edited ? ' <span class="edited-tag">(edited)</span>' : '';
             const fwdTag = msg.forwarded ? '<span class="fwd-tag">↪ Forwarded</span>' : '';
@@ -1261,19 +1515,19 @@
 
             const actions = `
                 <div class="msg-actions">
-                    <button title="React" onclick="openReactPalette(${msg.msg_id}, this)">😀</button>
-                    <button title="Reply" onclick="startReply(${msg.msg_id})">↩</button>
-                    <button title="Forward" onclick="openForward(${msg.msg_id})">⤴</button>
-                    <button title="Pin / unpin" onclick="togglePin(${msg.msg_id}, this)">📌</button>
-                    ${mine ? `<button title="Edit" onclick="startEdit(${msg.msg_id})">✎</button>
-                              <button title="Delete" onclick="deleteMessage(${msg.msg_id})">🗑</button>` : ''}
+                    <button title="React" aria-label="React" onclick="openReactPalette(${msg.msg_id}, this)">${ICON.smile}</button>
+                    <button title="Reply" aria-label="Reply" onclick="startReply(${msg.msg_id})">${ICON.reply}</button>
+                    <button title="Forward" aria-label="Forward" onclick="openForward(${msg.msg_id})">${ICON.forward}</button>
+                    <button title="Pin / unpin" aria-label="Pin or unpin" onclick="togglePin(${msg.msg_id}, this)">${ICON.pin}</button>
+                    ${mine ? `<button title="Edit" aria-label="Edit" onclick="startEdit(${msg.msg_id})">${ICON.edit}</button>
+                              <button title="Delete" aria-label="Delete" onclick="deleteMessage(${msg.msg_id})">${ICON.trash}</button>` : ''}
                 </div>`;
 
             if (msg.praise) {
                 const p = msg.praise;
                 const giver = escapeHtml(msg.sender || msg.username || 'Someone');
                 const toName = escapeHtml(p.to_name || 'someone');
-                const noteHtml = text ? `<div class="pc-note">${formatRich(text)}</div>` : '';
+                const noteHtml = text ? `<div class="pc-note" dir="auto">${formatRich(text)}</div>` : '';
                 const card = `<div class="praise-card">
                         <div class="pc-head"><span class="pc-badge">${p.emoji}</span>
                             <div><div class="pc-label">${escapeHtml(p.label)}</div>
@@ -1283,9 +1537,9 @@
                 // Praise has no editable text body, so omit Edit (would break message_edited).
                 const praiseActions = `
                     <div class="msg-actions">
-                        <button title="React" onclick="openReactPalette(${msg.msg_id}, this)">😀</button>
-                        <button title="Reply" onclick="startReply(${msg.msg_id})">↩</button>
-                        ${mine ? `<button title="Delete" onclick="deleteMessage(${msg.msg_id})">🗑</button>` : ''}
+                        <button title="React" aria-label="React" onclick="openReactPalette(${msg.msg_id}, this)">${ICON.smile}</button>
+                        <button title="Reply" aria-label="Reply" onclick="startReply(${msg.msg_id})">${ICON.reply}</button>
+                        ${mine ? `<button title="Delete" aria-label="Delete" onclick="deleteMessage(${msg.msg_id})">${ICON.trash}</button>` : ''}
                     </div>`;
                 row.innerHTML = `${avatar}<div class="msg-col">${card}<div class="reactions"></div></div>${praiseActions}`;
                 renderReactions(row, msg.reactions || []);
@@ -1569,7 +1823,7 @@
             const textEl = row.querySelector('.text');
             const html = formatRich(data.content);
             if (textEl) textEl.innerHTML = html;
-            else row.querySelector('.bubble').insertAdjacentHTML('afterbegin', `<div class="text">${html}</div>`);
+            else row.querySelector('.bubble').insertAdjacentHTML('afterbegin', `<div class="text" dir="auto">${html}</div>`);
             const time = row.querySelector('.time');
             if (time && !time.querySelector('.edited-tag')) time.insertAdjacentHTML('beforeend', ' <span class="edited-tag">(edited)</span>');
         });
@@ -1969,8 +2223,8 @@
                 const name = userNames[data.user_id];
                 if (name && !document.getElementById('nav-dm-' + data.user_id)) {
                     document.getElementById('dm-list').insertAdjacentHTML('beforeend', `
-                        <div class="item chat-nav" id="nav-dm-${data.user_id}" data-name="${name.toLowerCase()}" onclick="openChat('dm', ${data.user_id}, '${name}')">
-                            <span class="avatar-wrap"><img src="${avatarFor(data.user_id, name)}" class="profile-pic" data-uname="${escapeHtml(name)}" onerror="avatarFallback(this)"><span class="dot" id="dot-${data.user_id}"></span></span>
+                        <div class="item chat-nav" id="nav-dm-${data.user_id}" data-name="${escapeHtml(name.toLowerCase())}" data-title="${escapeHtml(name)}" onclick="openChat('dm', ${data.user_id}, this.dataset.title)">
+                            <span class="avatar-wrap"><img src="${escapeHtml(avatarFor(data.user_id, name))}" class="profile-pic" data-uname="${escapeHtml(name)}" onerror="avatarFallback(this)"><span class="dot" id="dot-${data.user_id}"></span></span>
                             <span class="name">${escapeHtml(name)}</span>
                             <span class="badge" id="badge-dm-${data.user_id}" style="display:none;">0</span>
                         </div>`);
@@ -2362,11 +2616,11 @@
         /* ---------- roster ---------- */
         socket.on('new_user_joined', function(newUser) {
             if (newUser.id === myUserId) return;
-            userAvatars[newUser.id] = `https://ui-avatars.com/api/?name=${encodeURIComponent(newUser.username)}&background=2563eb&color=fff`;
+            userAvatars[newUser.id] = newUser.profile_pic && newUser.profile_pic.startsWith('http') ? newUser.profile_pic : initialsAvatar(newUser.username);
             if (!document.getElementById('nav-dm-' + newUser.id)) {
                 document.getElementById('dm-list').insertAdjacentHTML('beforeend', `
-                    <div class="item chat-nav" id="nav-dm-${newUser.id}" data-name="${newUser.username.toLowerCase()}" onclick="openChat('dm', ${newUser.id}, '${newUser.username}')">
-                        <span class="avatar-wrap"><img src="${userAvatars[newUser.id]}" class="profile-pic" data-profile-id="${newUser.id}" data-uname="${escapeHtml(newUser.username)}" onerror="avatarFallback(this)"><span class="dot" id="dot-${newUser.id}"></span></span>
+                    <div class="item chat-nav" id="nav-dm-${newUser.id}" data-name="${escapeHtml(newUser.username.toLowerCase())}" data-title="${escapeHtml(newUser.username)}" onclick="openChat('dm', ${newUser.id}, this.dataset.title)">
+                        <span class="avatar-wrap"><img src="${escapeHtml(userAvatars[newUser.id])}" class="profile-pic" data-profile-id="${newUser.id}" data-uname="${escapeHtml(newUser.username)}" onerror="avatarFallback(this)"><span class="dot" id="dot-${newUser.id}"></span></span>
                         <span class="name">${escapeHtml(newUser.username)}</span>
                         <span class="badge" id="badge-dm-${newUser.id}" style="display:none;">0</span>
                     </div>`);
@@ -2384,7 +2638,7 @@
             if (document.getElementById('nav-group-' + group.id)) return;
             groupPhotos[group.id] = '';
             document.getElementById('group-list').insertAdjacentHTML('beforeend', `
-                <div class="item chat-nav" id="nav-group-${group.id}" data-name="${group.name.toLowerCase()}" onclick="openChat('group', ${group.id}, '${group.name}')">
+                <div class="item chat-nav" id="nav-group-${group.id}" data-name="${escapeHtml(group.name.toLowerCase())}" data-title="${escapeHtml(group.name)}" onclick="openChat('group', ${group.id}, this.dataset.title)">
                     <span class="avatar-wrap gav" id="gav-${group.id}"><div class="group-ic">#</div></span>
                     <span class="name">${escapeHtml(group.name)}</span>
                     <span class="badge" id="badge-group-${group.id}" style="display:none;">0</span>
@@ -2533,8 +2787,8 @@
             } else {
                 applyGroupHeaderPhoto(id, name); subtitle.textContent = ''; subtitle.classList.remove('online');
                 headerActions.innerHTML = `
-                    <button class="action-btn btn-light" onclick="viewParticipants()">Participants</button>
-                    <button class="action-btn btn-danger" onclick="leaveGroup()">Leave</button>`;
+                    <button class="action-btn btn-light" onclick="viewParticipants()" title="Participants">${ICON.users}<span class="ab-label">Participants</span></button>
+                    <button class="action-btn btn-danger" onclick="leaveGroup()" title="Leave group">${ICON.logout}<span class="ab-label">Leave</span></button>`;
             }
 
             document.getElementById('chat-box').innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
@@ -2547,7 +2801,13 @@
             socket.emit('join_chat', { type: type, id: id });
         }
 
+        // Replies for a chat the user has already switched away from must not paint over the current one.
+        function isStale(payload) {
+            return payload.type !== undefined && (payload.type !== currentChatType || payload.id !== currentChatId);
+        }
+
         socket.on('load_history', function(payload) {
+            if (isStale(payload)) return;
             const chatBox = document.getElementById('chat-box');
             chatBox.innerHTML = '<div id="load-older-spinner">Loading older messages...</div>';
             seenAvatars = {};   // old avatar elements were just wiped with the chat box
@@ -2577,6 +2837,7 @@
         });
 
         socket.on('older_history', function(payload) {
+            if (isStale(payload)) { loadingOlder = false; return; }
             const chatBox = document.getElementById('chat-box');
             const prevHeight = chatBox.scrollHeight, prevTop = chatBox.scrollTop;
             hasMoreOlder = payload.has_more;
@@ -3058,8 +3319,27 @@
             renderMentionBox();
         }
         const messageInput = document.getElementById("message-input");
+        // The composer is a textarea that grows with its content (up to a cap set in CSS).
+        function autoGrow() {
+            messageInput.style.height = 'auto';
+            messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + 'px';
+        }
+        // Code all over the page clears or fills the composer through .value; resize on every such write.
+        (function () {
+            const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+            Object.defineProperty(messageInput, 'value', {
+                get() { return desc.get.call(this); },
+                set(v) { desc.set.call(this, v); requestAnimationFrame(autoGrow); },
+            });
+        })();
+        let lastTypingSent = 0;
         messageInput.addEventListener("input", function() {
-            if (currentChatId) socket.emit('typing', { type: currentChatType, id: currentChatId });
+            autoGrow();
+            const now = Date.now();
+            if (currentChatId && now - lastTypingSent > 1500) {
+                lastTypingSent = now;
+                socket.emit('typing', { type: currentChatType, id: currentChatId });
+            }
             updateMentionBox();
             updateSlashBox();
         });
@@ -3077,7 +3357,7 @@
                 if (event.key === "Escape") { hideSlashBox(); return; }
             }
             if (event.key === "Escape" && (replyTo || editingMessageId)) { clearComposerContext(); return; }
-            if (event.key === "Enter") { event.preventDefault(); sendMessage(); }
+            if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); }
         });
     </script>
 </body>

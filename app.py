@@ -15,6 +15,7 @@ import ipaddress
 import socket as _socket
 import mimetypes
 from urllib.parse import urlparse
+from html import escape as html_escape
 from datetime import datetime, timezone, timedelta
 
 # App display timezone: Jordan (Asia/Amman, UTC+3, no DST since 2022).
@@ -35,6 +36,10 @@ def to_amman(dt):
 
 def fmt_time(dt):
     return to_amman(dt).strftime('%I:%M %p')
+
+def utcnow():
+    """Naive UTC 'now'. Every stored timestamp is naive UTC, whatever the server's own timezone."""
+    return datetime.now(UTC_TZ).replace(tzinfo=None)
 
 def iso_utc(dt):
     # Unambiguous UTC instant; the client renders it in Asia/Amman for everyone.
@@ -172,6 +177,8 @@ if os.environ.get('SENTRY_DSN'):
 
 # How many messages to load per "page" when opening a chat / loading older history.
 PAGE_SIZE = 30
+# Longest text message accepted; anything past this is cut off.
+MAX_MESSAGE_CHARS = 8000
 
 # In-memory presence tracking: user_id -> number of active socket connections.
 online_users = {}
@@ -218,7 +225,7 @@ class Message(db.Model):
     file_url = db.Column(db.String(250), nullable=True)
     file_type = db.Column(db.String(50), nullable=True)
     file_name = db.Column(db.String(150), nullable=True)
-    timestamp = db.Column(db.DateTime, default=datetime.now)
+    timestamp = db.Column(db.DateTime, default=utcnow)
     edited = db.Column(db.Boolean, default=False)
     is_deleted = db.Column(db.Boolean, default=False)
     reply_to_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=True)
@@ -236,7 +243,7 @@ class MessageRead(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False, index=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
-    timestamp = db.Column(db.DateTime, default=datetime.now)
+    timestamp = db.Column(db.DateTime, default=utcnow)
     __table_args__ = (db.UniqueConstraint('message_id', 'user_id', name='uq_message_user_read'),)
 
 # Emoji reactions on messages.
@@ -262,7 +269,7 @@ class LinkPreview(db.Model):
     description = db.Column(db.String(700))
     image = db.Column(db.String(700))
     ok = db.Column(db.Boolean, default=False)
-    fetched_at = db.Column(db.DateTime, default=datetime.now)
+    fetched_at = db.Column(db.DateTime, default=utcnow)
 
 # Per-user muted conversations (suppresses notifications, not delivery).
 class MutedChat(db.Model):
@@ -294,7 +301,7 @@ class Report(db.Model):
     reported_user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     message_id = db.Column(db.Integer, nullable=True)
     reason = db.Column(db.String(500))
-    timestamp = db.Column(db.DateTime, default=datetime.now)
+    timestamp = db.Column(db.DateTime, default=utcnow)
 
 # Messages scheduled to be sent at a future time.
 class ScheduledMessage(db.Model):
@@ -312,7 +319,7 @@ class AdminLog(db.Model):
     actor = db.Column(db.String(150))
     action = db.Column(db.String(60))
     detail = db.Column(db.String(300))
-    created_at = db.Column(db.DateTime, default=datetime.now)
+    created_at = db.Column(db.DateTime, default=utcnow)
 
 # Admin approval queue for new signups and password resets.
 class ApprovalRequest(db.Model):
@@ -321,7 +328,7 @@ class ApprovalRequest(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     username = db.Column(db.String(150))
     new_password = db.Column(db.String(255), nullable=True)  # pending password hash (reset only)
-    created_at = db.Column(db.DateTime, default=datetime.now)
+    created_at = db.Column(db.DateTime, default=utcnow)
 
 
 def safe_auto_migrate():
@@ -456,7 +463,7 @@ def reply_preview(reply_to_id):
     if not reply_to_id:
         return None
     m = Message.query.get(reply_to_id)
-    if not m:
+    if not m or not _can_access_message(m):
         return None
     sender = User.query.get(m.sender_id)
     if m.is_deleted:
@@ -700,11 +707,42 @@ def is_blocked_between(a, b):
         or_(and_(BlockedUser.blocker_id == a, BlockedUser.blocked_id == b),
             and_(BlockedUser.blocker_id == b, BlockedUser.blocked_id == a))).first() is not None
 
+def can_access_chat(chat_type, chat_id, write=False):
+    """May the current user read (or, with write=True, post in) this DM or group?
+
+    Groups: members, plus site admins (who can see every group). DMs: any existing
+    user, except that nobody can post across a block."""
+    if not current_user.is_authenticated:
+        return False
+    if chat_type == 'dm':
+        other = db.session.get(User, chat_id)
+        if not other:
+            return False
+        return not (write and other.id != current_user.id and is_blocked_between(current_user.id, chat_id))
+    if chat_type == 'group':
+        group = db.session.get(ChatGroup, chat_id)
+        return bool(group and (current_user in group.members or is_site_admin(current_user)))
+    return False
+
 # Site administrators are listed (by username) in the ADMIN_USERNAMES env var.
 _ADMIN_USERNAMES = {n.strip().lower() for n in os.environ.get('ADMIN_USERNAMES', '').split(',') if n.strip()}
 
 def is_site_admin(user):
     return bool(user and getattr(user, 'username', None) and user.username.lower() in _ADMIN_USERNAMES)
+
+# Characters that have no place in a display name and only ever cause trouble in HTML/JS.
+_BAD_NAME_CHARS = set('<>"\'`&\\/')
+
+def username_problem(name, user=None):
+    """Why `name` can't be used as a username (by `user`, when renaming), or None if it's fine."""
+    if not name or len(name) > 30:
+        return 'Username must be 1-30 characters.'
+    if any(c in _BAD_NAME_CHARS or c.isspace() and c != ' ' for c in name):
+        return 'Username can\'t contain < > " \' ` & / or \\.'
+    # Admin rights come from the username, so nobody can take over an admin's name.
+    if name.lower() in _ADMIN_USERNAMES and not (user and user.username.lower() == name.lower()):
+        return 'That username is reserved.'
+    return None
 
 # New signups / password resets need admin approval only if at least one admin exists.
 REQUIRE_APPROVAL = bool(_ADMIN_USERNAMES)
@@ -881,8 +919,8 @@ def load_user(user_id):
 @rate_limit("8 per minute", methods=["POST"])
 def login():
     if request.method == 'POST':
-        username = request.form.get('username').strip()
-        password = request.form.get('password')
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
 
         user = User.query.filter(func.lower(User.username) == func.lower(username)).first()
 
@@ -900,8 +938,13 @@ def login():
 @rate_limit("5 per minute", methods=["POST"])
 def register():
     if request.method == 'POST':
-        username = request.form.get('username').strip()
-        password = request.form.get('password')
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
+
+        problem = username_problem(username)
+        if problem:
+            flash(problem)
+            return redirect(url_for('register'))
 
         if len(password) < 8 or not re.search(r"[A-Z]", password) or not re.search(r"\d", password):
             flash('Password must be 8+ chars with 1 uppercase and 1 number.')
@@ -921,7 +964,7 @@ def register():
             db.session.add(req)
             db.session.commit()
             notify_admins_request(req)
-            flash('Account created! An admin needs to approve it before you can log in.')
+            flash('Account created! An admin needs to approve it before you can log in.', 'ok')
             return redirect(url_for('login'))
 
         new_user = User(username=username, password=hashed_pw, approved=True)
@@ -938,8 +981,8 @@ def register():
 @rate_limit("5 per minute", methods=["POST"])
 def reset_password():
     if request.method == 'POST':
-        username = request.form.get('username').strip()
-        new_password = request.form.get('password')
+        username = (request.form.get('username') or '').strip()
+        new_password = request.form.get('password') or ''
 
         if len(new_password) < 8 or not re.search(r"[A-Z]", new_password) or not re.search(r"\d", new_password):
             flash('Password must be 8+ chars with 1 uppercase and 1 number.')
@@ -954,11 +997,11 @@ def reset_password():
                 db.session.add(req)
                 db.session.commit()
                 notify_admins_request(req)
-                flash('Password reset request sent. An admin must approve it before it takes effect.')
+                flash('Password reset request sent. An admin must approve it before it takes effect.', 'ok')
                 return redirect(url_for('login'))
             user.password = new_hash
             db.session.commit()
-            flash('Password successfully reset! You can now log in.')
+            flash('Password successfully reset! You can now log in.', 'ok')
             return redirect(url_for('login'))
         else:
             flash('Username not found.')
@@ -1004,8 +1047,9 @@ def dashboard():
 @rate_limit("10 per minute", methods=["POST"])
 def update_username():
     new_username = (request.form.get('username') or '').strip()
-    if not new_username or len(new_username) > 150:
-        return {'error': 'Invalid username.'}, 400
+    problem = username_problem(new_username, current_user)
+    if problem:
+        return {'error': problem}, 400
     existing = User.query.filter(func.lower(User.username) == func.lower(new_username)).first()
     if existing and existing.id != current_user.id:
         return {'error': 'Username already taken.'}, 400
@@ -1031,7 +1075,10 @@ def update_password():
 @app.route('/upload_group_photo', methods=['POST'])
 @login_required
 def upload_group_photo():
-    group_id = int(request.form.get('group_id'))
+    try:
+        group_id = int(request.form.get('group_id'))
+    except (TypeError, ValueError):
+        return {'error': 'Bad request.'}, 400
     group = ChatGroup.query.get(group_id)
     if not group or not is_group_admin(group, current_user):
         return {'error': 'Not allowed.'}, 403
@@ -1047,7 +1094,7 @@ def upload_group_photo():
         else:
             filename = secure_filename(file.filename)
             ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'png'
-            new_filename = f"group_{group_id}.{ext}"
+            new_filename = f"group_{group_id}_{uuid.uuid4().hex[:8]}.{ext}"
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], new_filename))
             group.photo = url_for('static', filename=f'uploads/{new_filename}')
         db.session.commit()
@@ -1068,6 +1115,36 @@ def save_push_subscription():
         db.session.add(PushSubscription(user_id=current_user.id, endpoint=sub['endpoint'], data=json.dumps(sub)))
     db.session.commit()
     return {'success': True}
+
+# Initials avatars, served locally so nothing depends on a third-party image service.
+_AVATAR_GRADIENTS = [('#0fb5a0', '#2f7be8'), ('#2f7be8', '#7b61ff'), ('#7b61ff', '#e2508a'),
+                     ('#e2508a', '#f08a3c'), ('#f08a3c', '#d9b62b'), ('#1aa260', '#0fb5a0'),
+                     ('#5b6cff', '#22c1e0'), ('#c2417a', '#7b61ff')]
+
+@app.route('/avatar')
+def avatar_svg():
+    name = (request.args.get('name') or '').strip() or '?'
+    words = name.split()
+    initials = (words[0][0] + (words[1][0] if len(words) > 1 else '')).upper()
+    c1, c2 = _AVATAR_GRADIENTS[sum(map(ord, name)) % len(_AVATAR_GRADIENTS)]
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+           f'<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{c1}"/>'
+           f'<stop offset="1" stop-color="{c2}"/></linearGradient></defs><rect width="64" height="64" fill="url(#g)"/>'
+           '<text x="32" y="41.5" text-anchor="middle" font-size="25" font-weight="700" fill="#fff" '
+           'font-family="Manrope, Segoe UI, Roboto, Helvetica, Arial, sans-serif">'
+           f'{html_escape(initials)}</text></svg>')
+    resp = app.response_class(svg, mimetype='image/svg+xml')
+    resp.headers['Cache-Control'] = 'public, max-age=604800'
+    return resp
+
+@app.template_global()
+def avatar_url(pic, name):
+    """Where a profile/group picture lives, falling back to the initials avatar."""
+    if pic and pic.startswith('http'):
+        return pic
+    if pic and pic != 'default':
+        return url_for('static', filename='uploads/' + pic)
+    return url_for('avatar_svg', name=name)
 
 @app.route('/sw.js')
 def service_worker():
@@ -1096,7 +1173,7 @@ def upload_profile():
         else:
             filename = secure_filename(file.filename)
             ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else 'png'
-            new_filename = f"user_{current_user.id}.{ext}"
+            new_filename = f"user_{current_user.id}_{uuid.uuid4().hex[:8]}.{ext}"  # new name busts browser caches
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], new_filename))
             current_user.profile_pic = new_filename
         db.session.commit()
@@ -1110,12 +1187,14 @@ def upload_chat_file():
 
     file = request.files['file']
     chat_type = request.form.get('chat_type')
-    chat_id = int(request.form.get('chat_id'))
-    reply_to_id = request.form.get('reply_to_id')
-    reply_to_id = int(reply_to_id) if reply_to_id else None
+    try:
+        chat_id = int(request.form.get('chat_id'))
+        reply_to_id = int(request.form.get('reply_to_id') or 0) or None
+    except (TypeError, ValueError):
+        return {'error': 'Bad request.'}, 400
 
-    if chat_type == 'dm' and is_blocked_between(current_user.id, chat_id):
-        return {'error': 'Blocked.'}, 403
+    if not can_access_chat(chat_type, chat_id, write=True):
+        return {'error': 'Not allowed.'}, 403
 
     if file and file.filename != '':
         filename = secure_filename(file.filename)
@@ -1227,7 +1306,7 @@ def status_message_of(u):
     """Custom status {emoji, text} for a user, or None if unset/expired."""
     if not u or not (u.status_text or u.status_emoji):
         return None
-    if u.status_expires and u.status_expires <= datetime.now():
+    if u.status_expires and u.status_expires <= utcnow():
         return None
     return {'emoji': u.status_emoji or '', 'text': u.status_text or ''}
 
@@ -1239,6 +1318,12 @@ def effective_status(uid):
     if u and u.manual_presence in MANUAL_PRESENCES:
         return u.manual_presence
     return user_status.get(uid, 'active')
+
+@socketio.on('connect')
+def on_connect(auth=None):
+    # Every handler below assumes a logged-in user; refuse anonymous sockets up front.
+    if not current_user.is_authenticated:
+        return False
 
 @socketio.on('register_user')
 def on_register_user():
@@ -1300,7 +1385,7 @@ def on_set_status_message(data):
         u.status_emoji, u.status_text = emoji or None, text or None
         try:
             mins = int(data.get('minutes'))
-            u.status_expires = datetime.now() + timedelta(minutes=mins) if mins > 0 else None
+            u.status_expires = utcnow() + timedelta(minutes=mins) if mins > 0 else None
         except (TypeError, ValueError):
             u.status_expires = None
     db.session.commit()
@@ -1320,7 +1405,7 @@ def on_disconnect():
             try:
                 u = User.query.get(uid)
                 if u:
-                    u.last_seen = datetime.now()
+                    u.last_seen = utcnow()
                     db.session.commit()
                     ls = iso_utc(u.last_seen)
             except Exception:
@@ -1429,6 +1514,8 @@ def on_remove_participant(data):
 def on_join(data):
     chat_type = data['type']
     chat_id = int(data['id'])
+    if not can_access_chat(chat_type, chat_id):
+        return
 
     room = dm_room(current_user.id, chat_id) if chat_type == 'dm' else f"group_{chat_id}"
     join_room(room)
@@ -1440,6 +1527,7 @@ def on_join(data):
 
     pinned = q.filter(Message.pinned == True, Message.is_deleted == False).all()
     payload = {
+        'type': chat_type, 'id': chat_id,   # lets the client drop a reply for a chat it already left
         'messages': history,
         'has_more': total > len(history),
         'seen': get_seen_state(chat_type, chat_id, current_user.id),
@@ -1464,12 +1552,15 @@ def on_load_older(data):
     chat_type = data['type']
     chat_id = int(data['id'])
     before_id = int(data['before_id'])
+    if not can_access_chat(chat_type, chat_id):
+        return
 
     q = base_chat_query(chat_type, chat_id, current_user.id).filter(Message.id < before_id)
     total_older = q.count()
     older = q.offset(max(0, total_older - PAGE_SIZE)).limit(PAGE_SIZE).all()
 
     emit('older_history', {
+        'type': chat_type, 'id': chat_id,
         'messages': serialize_messages(older),
         'has_more': total_older > len(older),
     })
@@ -1478,6 +1569,8 @@ def on_load_older(data):
 def on_mark_read(data):
     chat_type = data['type']
     chat_id = int(data['id'])
+    if not can_access_chat(chat_type, chat_id):
+        return
 
     msgs = base_chat_query(chat_type, chat_id, current_user.id).filter(
         Message.sender_id != current_user.id
@@ -1513,6 +1606,8 @@ def on_mark_read(data):
 @socketio.on('typing')
 def handle_typing(data):
     chat_type, chat_id = data['type'], int(data['id'])
+    if not can_access_chat(chat_type, chat_id, write=True):
+        return
     room = dm_room(current_user.id, chat_id) if chat_type == 'dm' else f"group_{chat_id}"
     emit('user_typing', {
         'username': current_user.username, 'type': chat_type,
@@ -1528,7 +1623,8 @@ def handle_message(data):
     priority = norm_priority(data.get('priority'))
     client_id = data.get('client_id')   # echoed back so the sender can match its optimistic bubble
 
-    if chat_type == 'dm' and is_blocked_between(current_user.id, chat_id):
+    content = (content or '')[:MAX_MESSAGE_CHARS]
+    if not content.strip() or not can_access_chat(chat_type, chat_id, write=True):
         return
 
     if chat_type == 'dm':
@@ -1580,10 +1676,10 @@ def handle_praise(data):
     note = (data.get('note') or '').strip()[:500]
     to_id = data.get('to_id')
     to_id = int(to_id) if to_id else None
+    if not can_access_chat(chat_type, chat_id, write=True):
+        return
 
     if chat_type == 'dm':
-        if is_blocked_between(current_user.id, chat_id):
-            return
         to_id = chat_id  # in a DM the praised person is always the other party
         new_msg = Message(sender_id=current_user.id, receiver_id=chat_id, content=note,
                           praise_badge=badge, praise_to_id=to_id)
@@ -1641,7 +1737,7 @@ def on_send_gif(data):
     url = data.get('url') or ''
     if not _is_allowed_gif(url):
         return
-    if ct == 'dm' and is_blocked_between(current_user.id, cid):
+    if not can_access_chat(ct, cid, write=True):
         return
     if ct == 'dm':
         new_msg = Message(sender_id=current_user.id, receiver_id=cid, content="",
@@ -1705,7 +1801,7 @@ def on_delete_message(data):
 def on_toggle_reaction(data):
     m = Message.query.get(int(data['message_id']))
     emoji = (data.get('emoji') or '')[:16]
-    if not m or m.is_deleted or not emoji:
+    if not m or m.is_deleted or not emoji or not _can_access_message(m):
         return
     existing = MessageReaction.query.filter_by(
         message_id=m.id, user_id=current_user.id, emoji=emoji
@@ -1769,7 +1865,7 @@ def _can_access_message(m):
         return False
     if m.group_id:
         group = ChatGroup.query.get(m.group_id)
-        return bool(group and current_user in group.members)
+        return bool(group and (current_user in group.members or is_site_admin(current_user)))
     return current_user.id in (m.sender_id, m.receiver_id)
 
 def _pin_preview(m):
@@ -1814,6 +1910,8 @@ def on_forward_message(data):
         return
     target_type = data.get('target_type')
     target_id = int(data['target_id'])
+    if not can_access_chat(target_type, target_id, write=True):
+        return
 
     if target_type == 'group':
         group = ChatGroup.query.get(target_id)
@@ -2059,7 +2157,7 @@ def on_schedule_message(data):
             send_at = send_at.astimezone(UTC_TZ).replace(tzinfo=None)  # store naive UTC
     except Exception:
         return
-    if ct == 'dm' and is_blocked_between(current_user.id, cid):
+    if not can_access_chat(ct, cid, write=True):
         return
     db.session.add(ScheduledMessage(sender_id=current_user.id, chat_type=ct, chat_id=cid,
                                     content=content, send_at=send_at, sent=False))
@@ -2187,7 +2285,7 @@ def scheduled_poller():
             with app.app_context():
                 due = ScheduledMessage.query.filter(
                     ScheduledMessage.sent == False,
-                    ScheduledMessage.send_at <= datetime.now()
+                    ScheduledMessage.send_at <= utcnow()
                 ).all()
                 for sm in due:
                     sm.sent = True

@@ -1,0 +1,113 @@
+/* Sign-in, sign-up and reset pages: one glass card over the same aurora as the app. */
+:root {
+    color-scheme: light;
+    --bg: #eef2f7; --card: rgba(255,255,255,.74); --text: #0d1726; --soft: #5b6a80;
+    --border: rgba(16,32,64,.10); --field: rgba(255,255,255,.85);
+    --accent: #0b8f80; --accent-soft: rgba(11,143,128,.14);
+    --grad: linear-gradient(135deg, #0fa392 0%, #2f8fd8 55%, #4a68ea 100%);
+    --danger: #d93d42; --danger-soft: rgba(229,72,77,.10); --ok: #12a150;
+    --aura-1: rgba(16,190,165,.30); --aura-2: rgba(74,104,234,.24); --aura-3: rgba(236,98,152,.18);
+    --font: 'Manrope', system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans Arabic', Arial, sans-serif;
+    --font-display: 'Bricolage Grotesque', 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --bg: #070b15; --card: rgba(15,22,40,.66); --text: #e7edf8; --soft: #8e9bb3;
+        --border: rgba(255,255,255,.09); --field: rgba(255,255,255,.05);
+        --accent: #3ee0c5; --accent-soft: rgba(62,224,197,.14);
+        --danger: #ff7a7f; --danger-soft: rgba(255,107,112,.12); --ok: #3ddc97;
+        --aura-1: rgba(22,206,176,.34); --aura-2: rgba(92,96,255,.30); --aura-3: rgba(232,78,150,.22);
+    }
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #070b15; --card: rgba(15,22,40,.66); --text: #e7edf8; --soft: #8e9bb3;
+    --border: rgba(255,255,255,.09); --field: rgba(255,255,255,.05);
+    --accent: #3ee0c5; --accent-soft: rgba(62,224,197,.14);
+    --danger: #ff7a7f; --danger-soft: rgba(255,107,112,.12); --ok: #3ddc97;
+    --aura-1: rgba(22,206,176,.34); --aura-2: rgba(92,96,255,.30); --aura-3: rgba(232,78,150,.22);
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+    margin: 0; font-family: var(--font); color: var(--text); background: var(--bg);
+    display: grid; place-items: center; min-height: 100vh; min-height: 100dvh;
+    padding: 24px max(16px, env(safe-area-inset-right, 0px)) 24px max(16px, env(safe-area-inset-left, 0px));
+    -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+body::before {
+    content: ''; position: fixed; inset: -25%; z-index: -1; pointer-events: none;
+    background:
+        radial-gradient(36% 40% at 22% 24%, var(--aura-1), transparent 70%),
+        radial-gradient(34% 40% at 80% 20%, var(--aura-2), transparent 70%),
+        radial-gradient(40% 44% at 64% 86%, var(--aura-3), transparent 72%);
+    filter: blur(40px) saturate(120%);
+    animation: drift 30s ease-in-out infinite alternate;
+}
+@keyframes drift {
+    from { transform: translate3d(-2%, 1%, 0) rotate(-3deg); }
+    to   { transform: translate3d(3%, -2%, 0) rotate(5deg) scale(1.05); }
+}
+
+.card {
+    width: 100%; max-width: 410px; padding: 36px 32px 28px; border-radius: 28px;
+    background: var(--card); border: 1px solid var(--border);
+    backdrop-filter: blur(24px) saturate(150%); -webkit-backdrop-filter: blur(24px) saturate(150%);
+    box-shadow: 0 30px 80px -24px rgba(10,20,50,.35);
+    animation: rise .5s cubic-bezier(.2,.9,.3,1) both;
+}
+@keyframes rise { from { transform: translateY(12px) scale(.985); } to { transform: none; } }
+
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; }
+.brand-mark { width: 34px; height: 34px; border-radius: 11px; background: var(--grad); display: grid; place-items: center;
+    box-shadow: 0 8px 20px -8px rgba(20,140,180,.8); }
+.brand-mark svg { width: 19px; height: 19px; fill: #fff; }
+.brand-name { font-family: var(--font-display); font-weight: 700; font-size: 16px; letter-spacing: -.02em; }
+
+h1 { font-family: var(--font-display); font-size: 30px; line-height: 1.1; letter-spacing: -.035em; margin: 0 0 6px; font-weight: 800; text-wrap: balance; }
+.sub { color: var(--soft); font-size: 14.5px; margin: 0 0 22px; line-height: 1.5; }
+
+form { display: flex; flex-direction: column; gap: 12px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--soft); }
+.control { position: relative; }
+input {
+    width: 100%; padding: 13px 15px; font: inherit; font-size: 15px; color: var(--text);
+    background: var(--field); border: 1px solid var(--border); border-radius: 14px; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+}
+input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.control input { padding-right: 64px; }
+.reveal { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); border: none; background: none;
+    color: var(--soft); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; padding: 6px 8px; border-radius: 8px; }
+.reveal:hover { color: var(--accent); }
+
+.submit {
+    margin-top: 8px; width: 100%; padding: 14px; border: none; border-radius: 999px; cursor: pointer;
+    background: var(--grad); color: #fff; font: inherit; font-size: 15.5px; font-weight: 800;
+    box-shadow: 0 14px 30px -14px rgba(20,140,180,.9); transition: filter .15s, transform .1s;
+}
+.submit:hover { filter: brightness(1.08); }
+.submit:active { transform: scale(.98); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input:focus-visible { outline: none; }
+
+.flash { background: var(--danger-soft); color: var(--danger); padding: 11px 14px; border-radius: 12px;
+    margin-bottom: 14px; font-size: 14px; font-weight: 600; }
+.flash.ok { background: var(--accent-soft); color: var(--accent); }
+
+.requirements { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.req-item { font-size: 12.5px; font-weight: 700; padding: 5px 10px; border-radius: 999px;
+    background: var(--field); border: 1px solid var(--border); color: var(--soft); transition: color .15s, border-color .15s, background .15s; }
+.req-item.valid { color: var(--ok); border-color: currentColor; background: transparent; }
+.req-icon { margin-right: 4px; }
+
+.links { margin-top: 22px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; font-size: 14px; color: var(--soft); }
+.links a { color: var(--accent); font-weight: 700; text-decoration: none; }
+.links a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.links.center { justify-content: center; }
+
+@media (max-width: 440px) { .card { padding: 28px 22px 22px; border-radius: 24px; } h1 { font-size: 26px; } }
+@media (prefers-reduced-motion: reduce) { body::before, .card { animation: none; } }
