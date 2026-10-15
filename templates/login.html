@@ -2,49 +2,70 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Workspace Chat</title>
-    <style>
-        :root { --accent:#2563eb; --bg:#f0f2f5; --text:#111b21; --soft:#667781; --border:#e9edef; --danger:#ef4444; }
-        * { box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #eef2ff, #f0f2f5); display: flex; justify-content: center;
-            align-items: center; height: 100vh; margin: 0; }
-        .card { background: #fff; padding: 40px; border-radius: 18px; box-shadow: 0 10px 40px rgba(0,0,0,.08); width: 100%; max-width: 400px; }
-        .logo { text-align: center; font-size: 40px; margin-bottom: 6px; }
-        h2 { margin: 0 0 4px; color: var(--text); text-align: center; }
-        .sub { text-align: center; color: var(--soft); font-size: 14px; margin-bottom: 24px; }
-        input { width: 100%; padding: 13px 16px; margin: 8px 0; border: 1px solid var(--border); border-radius: 12px; font-size: 15px; outline: none; }
-        input:focus { border-color: var(--accent); }
-        button { width: 100%; padding: 14px; background: var(--accent); color: #fff; border: none; border-radius: 12px; cursor: pointer; font-size: 16px; font-weight: 600; margin-top: 14px; transition: .15s; }
-        button:hover { filter: brightness(1.05); }
-        .flash { background: #fef2f2; color: var(--danger); padding: 11px; border-radius: 10px; margin-bottom: 16px; text-align: center; font-size: 14px; border: 1px solid #fecaca; }
-        .links { text-align: center; font-size: 14px; margin-top: 22px; color: var(--soft); }
-        .links a { color: var(--accent); text-decoration: none; font-weight: 600; }
-        .links a:hover { text-decoration: underline; }
-        .links .forgot { display: block; margin-bottom: 10px; color: var(--danger); }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Sign in · Workspace Chat</title>
+    <meta name="theme-color" content="#0a0f1c">
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Manrope:wght@400;600;700;800&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='auth.css') }}">
+    <script>
+        // Same theme the user picked inside the app; otherwise the CSS follows the device.
+        try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+    </script>
 </head>
 <body>
-    <div class="card">
-        <div class="logo">&#128172;</div>
-        <h2>Welcome back</h2>
-        <div class="sub">Sign in to Workspace Chat</div>
-
-        {% with messages = get_flashed_messages() %}
-          {% if messages %}{% for message in messages %}<div class="flash">{{ message }}</div>{% endfor %}{% endif %}
+    <main class="card">
+        <div class="brand">
+            <span class="brand-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-7l-5 4v-4H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z"/></svg></span>
+            <span class="brand-name">Workspace Chat</span>
+        </div>
+        <h1>Welcome back</h1>
+        <p class="sub">Sign in to pick up your conversations.</p>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, message in messages %}<div class="flash{{ ' ok' if category == 'ok' }}" role="status">{{ message }}</div>{% endfor %}
         {% endwith %}
 
         <form method="POST">
-            <input type="text" name="username" placeholder="Username" required>
-            <input type="password" name="password" placeholder="Password" required>
-            <button type="submit">Login</button>
+            <div class="field">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus>
+            </div>
+            <div class="field">
+                <label for="password">Password</label>
+                <div class="control">
+                    <input type="password" id="password" name="password" autocomplete="current-password" required>
+                    <button type="button" class="reveal" onclick="togglePw(this)" aria-pressed="false">Show</button>
+                </div>
+            </div>
+            <button type="submit" class="submit">Sign in</button>
         </form>
-
         <div class="links">
-            <a href="/reset_password" class="forgot">Forgot password?</a>
-            Don't have an account? <a href="/register">Register here</a>
+            <a href="/reset_password">Forgot password?</a>
+            <span>New here? <a href="/register">Create an account</a></span>
         </div>
-    </div>
+    </main>
+    <script>
+        function togglePw(btn) {
+            const input = btn.previousElementSibling;
+            const show = input.type === 'password';
+            input.type = show ? 'text' : 'password';
+            btn.textContent = show ? 'Hide' : 'Show';
+            btn.setAttribute('aria-pressed', show);
+        }
+        function updateReq(id, isValid) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.toggle('valid', isValid);
+            el.querySelector('.req-icon').textContent = isValid ? '✓' : '·';
+        }
+        function checkPassword() {
+            const pw = document.getElementById('password').value;
+            updateReq('req-length', pw.length >= 8);
+            updateReq('req-upper', /[A-Z]/.test(pw));
+            updateReq('req-number', /\d/.test(pw));
+        }
+    </script>
 </body>
 </html>

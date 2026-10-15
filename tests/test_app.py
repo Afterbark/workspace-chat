@@ -27,6 +27,8 @@ import app as appmod  # noqa: E402
 @pytest.fixture()
 def client():
     appmod.app.config["TESTING"] = True
+    if appmod.limiter:
+        appmod.limiter.enabled = False  # tests register many users from one address
     with appmod.app.app_context():
         appmod.db.drop_all()
         appmod.db.create_all()
@@ -126,3 +128,75 @@ def test_group_admin_helper(client):
         appmod.db.session.commit()
         assert appmod.is_group_admin(g, owner) is True
         assert appmod.is_group_admin(g, member) is False
+
+
+# ---------- access control over websockets ----------
+
+def _socket_for(username):
+    """Register `username` with its own HTTP client and return a logged-in Socket.IO test client."""
+    http = appmod.app.test_client()
+    _register(http, username)
+    return appmod.socketio.test_client(appmod.app, flask_test_client=http)
+
+
+def _make_group(name, *usernames):
+    with appmod.app.app_context():
+        users = [appmod.User.query.filter_by(username=u).first() for u in usernames]
+        g = appmod.ChatGroup(name=name, owner_id=users[0].id)
+        for u in users:
+            g.members.append(u)
+        appmod.db.session.add(g)
+        appmod.db.session.commit()
+        return g.id
+
+
+def test_anonymous_socket_rejected(client):
+    sio = appmod.socketio.test_client(appmod.app, flask_test_client=appmod.app.test_client())
+    assert not sio.is_connected()
+
+
+def test_non_member_cannot_read_group(client):
+    member = _socket_for("ivy")
+    outsider = _socket_for("jack")
+    gid = _make_group("secret", "ivy")
+    member.emit("send_message", {"type": "group", "id": gid, "message": "private plans"})
+
+    outsider.get_received()
+    outsider.emit("join_chat", {"type": "group", "id": gid})
+    assert not [e for e in outsider.get_received() if e["name"] == "load_history"]
+
+    member.get_received()
+    member.emit("join_chat", {"type": "group", "id": gid})
+    history = [e for e in member.get_received() if e["name"] == "load_history"]
+    assert history and history[0]["args"][0]["messages"][0]["content"] == "private plans"
+
+
+def test_non_member_cannot_post_to_group(client):
+    _socket_for("kim")
+    outsider = _socket_for("lou")
+    gid = _make_group("closed", "kim")
+    outsider.emit("send_message", {"type": "group", "id": gid, "message": "spam"})
+    with appmod.app.app_context():
+        assert appmod.Message.query.filter_by(group_id=gid, content="spam").count() == 0
+
+
+def test_blank_message_ignored(client):
+    a = _socket_for("max")
+    _socket_for("ned")
+    with appmod.app.app_context():
+        ned_id = appmod.User.query.filter_by(username="ned").first().id
+    a.emit("send_message", {"type": "dm", "id": ned_id, "message": "   "})
+    with appmod.app.app_context():
+        assert appmod.Message.query.filter_by(receiver_id=ned_id).count() == 0
+
+
+def test_username_with_markup_rejected(client):
+    _register(client, "<img src=x onerror=alert(1)>")
+    with appmod.app.app_context():
+        assert appmod.User.query.filter(appmod.User.username.like("<img%")).count() == 0
+
+
+def test_timestamps_are_utc():
+    from datetime import datetime, timezone
+    drift = abs((appmod.utcnow() - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds())
+    assert drift < 5
