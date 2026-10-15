@@ -254,3 +254,33 @@ def test_typing_reaches_recipient_who_has_not_opened_the_chat(client):
     sender.emit("typing", {"type": "dm", "id": val_id})
     typing = [e for e in other.get_received() if e["name"] == "user_typing"]
     assert typing and typing[0]["args"][0]["username"] == "uma"
+
+
+def test_only_site_admins_get_the_approval_inbox(client, monkeypatch):
+    larry_http, mallory_http = appmod.app.test_client(), appmod.app.test_client()
+    _register(larry_http, "Larry")
+    _register(mallory_http, "mallory")
+    monkeypatch.setattr(appmod, "_ADMIN_USERNAMES", {"larry"})
+    # the bell shows on the desktop rail and in the phone header, for the admin only
+    assert larry_http.get("/dashboard").get_data(as_text=True).count('aria-label="Approval requests"') == 2
+    assert 'aria-label="Approval requests"' not in mallory_http.get("/dashboard").get_data(as_text=True)
+
+    with appmod.app.app_context():
+        pending = appmod.User(username="newbie", password="x", approved=False)
+        appmod.db.session.add(pending)
+        appmod.db.session.commit()
+        req = appmod.ApprovalRequest(kind="signup", user_id=pending.id, username="newbie")
+        appmod.db.session.add(req)
+        appmod.db.session.commit()
+        req_id = req.id
+
+    mallory = appmod.socketio.test_client(appmod.app, flask_test_client=mallory_http)
+    mallory.emit("approve_request", {"id": req_id})
+    with appmod.app.app_context():
+        assert not appmod.User.query.filter_by(username="newbie").first().approved
+
+    larry = appmod.socketio.test_client(appmod.app, flask_test_client=larry_http)
+    larry.emit("approve_request", {"id": req_id})
+    with appmod.app.app_context():
+        assert appmod.User.query.filter_by(username="newbie").first().approved
+        assert appmod.ApprovalRequest.query.count() == 0
