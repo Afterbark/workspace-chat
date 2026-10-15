@@ -625,6 +625,62 @@ def unread_counts(me_id, group_ids):
         group_map = {gid: cnt for gid, cnt in g_rows}
     return dm_map, group_map
 
+def preview_label(m):
+    """One-line summary of a message for the chat list ("📷 Photo", "Message deleted", the text...)."""
+    if m.is_deleted:
+        return 'Message deleted'
+    if m.praise_badge in PRAISE_BADGES:
+        b = PRAISE_BADGES[m.praise_badge]
+        return f"{b['emoji']} {b['label']}"
+    text = ' '.join((m.content or '').split())
+    if text:
+        return text[:140]
+    name = (m.file_name or '').lower()
+    if m.file_type == 'audio' or name.startswith('voice_'):
+        return '🎤 Voice message'
+    if m.file_type == 'image':
+        return 'GIF' if name == 'gif.gif' else '📷 Photo'
+    if m.file_type == 'video':
+        return '🎬 Video'
+    if m.file_url:
+        return '📎 ' + (m.file_name or 'File')
+    return ''
+
+def chat_previews(me_id, group_ids):
+    """The newest message of each of a user's chats, keyed "dm:<other id>" / "group:<id>".
+
+    Four aggregate queries whatever the number of chats. DM partners are found from
+    both directions separately rather than with a CASE expression, which keeps the
+    GROUP BY portable across SQLite and Postgres."""
+    newest = {}
+    sent = (db.session.query(Message.receiver_id, func.max(Message.id))
+            .filter(Message.sender_id == me_id, Message.receiver_id.isnot(None), Message.group_id.is_(None))
+            .group_by(Message.receiver_id).all())
+    received = (db.session.query(Message.sender_id, func.max(Message.id))
+                .filter(Message.receiver_id == me_id, Message.group_id.is_(None))
+                .group_by(Message.sender_id).all())
+    for other_id, mid in sent + received:
+        key = f"dm:{other_id}"
+        newest[key] = max(newest.get(key, 0), mid)
+    if group_ids:
+        for gid, mid in (db.session.query(Message.group_id, func.max(Message.id))
+                         .filter(Message.group_id.in_(group_ids))
+                         .group_by(Message.group_id).all()):
+            newest[f"group:{gid}"] = mid
+    if not newest:
+        return {}
+    msgs = {m.id: m for m in Message.query.filter(Message.id.in_(list(newest.values()))).all()}
+    names = {u.id: u.username for u in User.query.filter(User.id.in_({m.sender_id for m in msgs.values()})).all()}
+    out = {}
+    for key, mid in newest.items():
+        m = msgs.get(mid)
+        if not m:
+            continue
+        out[key] = {'msg_id': m.id, 'text': preview_label(m), 'ts': iso_utc(m.timestamp),
+                    'sender_id': m.sender_id, 'sender': names.get(m.sender_id, ''),
+                    'system': bool(m.is_system)}
+    return out
+
 def first_unread_id(chat_type, chat_id, me_id):
     """Oldest message from others that the user hasn't read yet (for the 'New messages'
     divider). One indexed aggregate query instead of loading every id into Python."""
@@ -1033,12 +1089,14 @@ def dashboard():
                            else user_status.get(uid, 'active')) for uid in online_now}
     last_seen = {u.id: (iso_utc(u.last_seen) if u.last_seen else None) for u in all_users}
     status_messages = {u.id: status_message_of(u) for u in user_dict.values()}
+    previews = chat_previews(current_user.id, [g.id for g in user_groups])
 
     return render_template('dashboard.html', users=all_users, groups=user_groups,
                            user_dict=user_dict, dm_unread=dm_unread, group_unread=group_unread,
                            vapid_public_key=VAPID_PUBLIC_KEY, muted=muted, archived=archived,
                            online_now=online_now, online_status=online_status, last_seen=last_seen, blocked_ids=list(blocked_ids),
                            status_messages=status_messages,
+                           previews=previews,
                            my_presence=(current_user.manual_presence or 'available'),
                            my_status_message=status_message_of(current_user),
                            giphy_api_key=os.environ.get('GIPHY_API_KEY', ''),
@@ -1239,7 +1297,7 @@ def upload_chat_file():
         msg_packet = {
             'msg_id': new_msg.id, 'username': current_user.username, 'message': "",
             'file_url': file_url, 'file_type': file_category, 'file_name': filename,
-            'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
+            'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None, 'receiver_id': chat_id if chat_type == 'dm' else None,
             'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
             'ts_iso': iso_utc(new_msg.timestamp), 'mentions': [],
             'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
@@ -1612,12 +1670,20 @@ def handle_typing(data):
     chat_type, chat_id = data['type'], int(data['id'])
     if not can_access_chat(chat_type, chat_id, write=True):
         return
-    room = dm_room(current_user.id, chat_id) if chat_type == 'dm' else f"group_{chat_id}"
-    emit('user_typing', {
+    packet = {
         'username': current_user.username, 'type': chat_type,
         'sender_id': current_user.id,
         'group_id': chat_id if chat_type == 'group' else None,
-    }, to=room, include_self=False)
+    }
+    # Sent to each recipient's personal room (not the chat room), so the chat list can
+    # show "typing" on conversations the recipient doesn't have open.
+    if chat_type == 'dm':
+        if chat_id != current_user.id:
+            emit('user_typing', packet, to=f"user_sys_{chat_id}")
+    else:
+        for user in ChatGroup.query.get(chat_id).members:
+            if user.id != current_user.id:
+                emit('user_typing', packet, to=f"user_sys_{user.id}")
 
 @socketio.on('send_message')
 def handle_message(data):
@@ -1646,7 +1712,7 @@ def handle_message(data):
     msg_packet = {
         'msg_id': new_msg.id, 'username': current_user.username, 'message': content,
         'file_url': None, 'file_type': None, 'file_name': None,
-        'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
+        'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None, 'receiver_id': chat_id if chat_type == 'dm' else None,
         'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
         'ts_iso': iso_utc(new_msg.timestamp), 'mentions': mentions,
         'reply_to': reply_preview(reply_to_id), 'reactions': [], 'edited': False,
@@ -1703,7 +1769,7 @@ def handle_praise(data):
     msg_packet = {
         'msg_id': new_msg.id, 'username': current_user.username, 'message': note,
         'file_url': None, 'file_type': None, 'file_name': None,
-        'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None,
+        'type': chat_type, 'group_id': chat_id if chat_type == 'group' else None, 'receiver_id': chat_id if chat_type == 'dm' else None,
         'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
         'ts_iso': iso_utc(new_msg.timestamp), 'mentions': [to_id] if to_id else [],
         'reply_to': None, 'reactions': [], 'edited': False,
@@ -1756,7 +1822,7 @@ def on_send_gif(data):
     packet = {
         'msg_id': new_msg.id, 'username': current_user.username, 'message': "",
         'file_url': url, 'file_type': 'image', 'file_name': 'gif.gif',
-        'type': ct, 'group_id': cid if ct == 'group' else None,
+        'type': ct, 'group_id': cid if ct == 'group' else None, 'receiver_id': cid if ct == 'dm' else None,
         'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
         'ts_iso': iso_utc(new_msg.timestamp), 'mentions': [],
         'reply_to': None, 'reactions': [], 'edited': False,
@@ -1935,7 +2001,7 @@ def on_forward_message(data):
     packet = {
         'msg_id': new_msg.id, 'username': current_user.username, 'message': new_msg.content or "",
         'file_url': new_msg.file_url, 'file_type': new_msg.file_type, 'file_name': new_msg.file_name,
-        'type': target_type, 'group_id': target_id if target_type == 'group' else None,
+        'type': target_type, 'group_id': target_id if target_type == 'group' else None, 'receiver_id': target_id if target_type == 'dm' else None,
         'sender_id': current_user.id, 'timestamp': fmt_time(new_msg.timestamp),
         'ts_iso': iso_utc(new_msg.timestamp), 'mentions': [],
         'reply_to': None, 'reactions': [], 'edited': False,
@@ -1955,6 +2021,7 @@ def on_forward_message(data):
         push_to_offline_recipients([u.id for u in group.members], f"#{group.name}",
                                    f"{current_user.username} forwarded a message", 'group', target_id)
     emit('receive_message', packet, to=room)
+    emit('receive_message', packet, to=f"user_sys_{current_user.id}")
 
 
 # ---------- mute / archive / block / report ----------
@@ -2261,7 +2328,7 @@ def deliver_scheduled(sm):
     packet = {
         'msg_id': new_msg.id, 'username': sender.username, 'message': sm.content,
         'file_url': None, 'file_type': None, 'file_name': None,
-        'type': sm.chat_type, 'group_id': sm.chat_id if sm.chat_type == 'group' else None,
+        'type': sm.chat_type, 'group_id': sm.chat_id if sm.chat_type == 'group' else None, 'receiver_id': sm.chat_id if sm.chat_type == 'dm' else None,
         'sender_id': sm.sender_id, 'timestamp': fmt_time(new_msg.timestamp),
         'ts_iso': iso_utc(new_msg.timestamp), 'mentions': mentions,
         'reply_to': None, 'reactions': [], 'edited': False,

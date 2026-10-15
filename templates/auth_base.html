@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>{% block title %}{% endblock %} · Workspace Chat</title>
+    <meta name="theme-color" content="#060914">
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="{{ url_for('static', filename='auth.css') }}?v=nebula-1">
+    <script>
+        // Same theme and accent the user picked inside the app; otherwise follow the device.
+        (function () {
+            var d = document.documentElement, t = null, a = null;
+            try { t = localStorage.getItem('theme'); a = localStorage.getItem('accent'); } catch (e) {}
+            if (t !== 'light' && t !== 'dark') t = (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+            d.setAttribute('data-theme', t);
+            if (a) d.setAttribute('data-accent', a);
+        })();
+    </script>
+</head>
+<body>
+    <!-- left: a living preview of the app -->
+    <aside class="showcase" aria-hidden="true">
+        <div class="sc-aurora"><i></i><i></i><i></i><i></i></div>
+        <div class="sc-top">
+            <span class="brand-mark"><svg viewBox="0 0 24 24"><path d="M5 4h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-7l-5 4v-4H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z"/></svg></span>
+            <span class="brand-name">Workspace Chat</span>
+        </div>
+
+        <div class="demo">
+            <div class="demo-head">
+                <span class="d-gav">LC</span>
+                <div class="d-title"><b>Launch crew</b><small><span class="d-live"></span>4 online</small></div>
+                <span class="d-faces"><i class="f1">L</i><i class="f2">O</i><i class="f3">N</i></span>
+            </div>
+            <div class="d-body">
+                <div class="d-row" data-step="0"><span class="d-av f1">L</span><span class="d-bubble">Final build is green ✅</span></div>
+                <div class="d-row" data-step="1"><span class="d-av f2">O</span><span class="d-bubble">Ship it? 🚀</span></div>
+                <div class="d-row mine" data-step="2"><span class="d-bubble">Shipping now ✨<span class="d-react" data-step="5">❤️ 2</span></span></div>
+                <div class="d-row typing" data-step="3"><span class="d-av f3">N</span><span class="d-bubble"><i></i><i></i><i></i></span></div>
+                <div class="d-row" data-step="4"><span class="d-av f3">N</span><span class="d-bubble">Legend. Coffee's on me ☕</span></div>
+            </div>
+            <div class="d-compose"><span>Message</span><span class="d-send"><svg viewBox="0 0 24 24"><path d="M5 12h13M12 5l7 7-7 7"/></svg></span></div>
+        </div>
+
+        <div class="sc-copy">
+            <h2>Talk it through, <em>together.</em></h2>
+            <p>Messages, voice notes, reactions and praise for your whole team, live on every device.</p>
+        </div>
+    </aside>
+
+    <!-- right: the form -->
+    <main class="panel">
+        <div class="form-wrap">
+            <h1>{% block heading %}{% endblock %}</h1>
+            <p class="sub">{% block sub %}{% endblock %}</p>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% for category, message in messages %}<div class="flash{{ ' ok' if category == 'ok' }}" role="status">{{ message }}</div>{% endfor %}
+            {% endwith %}
+            {% block form %}{% endblock %}
+            {% block links %}{% endblock %}
+        </div>
+    </main>
+
+    <script>
+        function togglePw(btn) {
+            const input = btn.previousElementSibling;
+            const show = input.type === 'password';
+            input.type = show ? 'text' : 'password';
+            btn.textContent = show ? 'Hide' : 'Show';
+            btn.setAttribute('aria-pressed', show);
+        }
+        function updateReq(id, isValid) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.toggle('valid', isValid);
+            el.querySelector('.req-icon').textContent = isValid ? '✓' : '·';
+        }
+        function checkPassword() {
+            const pw = document.getElementById('password').value;
+            updateReq('req-length', pw.length >= 8);
+            updateReq('req-upper', /[A-Z]/.test(pw));
+            updateReq('req-number', /\d/.test(pw));
+        }
+        // One submit only: the button shows a spinner while the page loads.
+        document.querySelectorAll('form').forEach(f => f.addEventListener('submit', () => {
+            const b = f.querySelector('.submit');
+            if (b) setTimeout(() => { b.classList.add('loading'); b.disabled = true; }, 0);
+        }));
+
+        // The little conversation on the left plays on a loop.
+        (function demo() {
+            const rows = Array.from(document.querySelectorAll('.demo [data-step]'));
+            const at = n => rows.find(r => +r.dataset.step === n);
+            if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                rows.forEach(r => { if (!r.classList.contains('typing')) r.classList.add('in'); });
+                return;
+            }
+            const plan = [[600, 0], [1700, 1], [3000, 2], [4300, 3], [6000, 4], [6900, 5]];
+            function run() {
+                plan.forEach(([t, n]) => setTimeout(() => {
+                    at(n).classList.add('in');
+                    if (n === 4) at(3).classList.remove('in');
+                }, t));
+                setTimeout(() => rows.forEach(r => r.classList.add('out')), 11000);
+                setTimeout(() => { rows.forEach(r => r.classList.remove('in', 'out')); run(); }, 11700);
+            }
+            run();
+        })();
+    </script>
+</body>
+</html>

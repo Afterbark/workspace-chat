@@ -1,32 +1,8 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Sign up · Workspace Chat</title>
-    <meta name="theme-color" content="#0a0f1c">
-    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Manrope:wght@400;600;700;800&display=swap">
-    <link rel="stylesheet" href="{{ url_for('static', filename='auth.css') }}">
-    <script>
-        // Same theme the user picked inside the app; otherwise the CSS follows the device.
-        try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
-    </script>
-</head>
-<body>
-    <main class="card">
-        <div class="brand">
-            <span class="brand-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-7l-5 4v-4H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z"/></svg></span>
-            <span class="brand-name">Workspace Chat</span>
-        </div>
-        <h1>Create your account</h1>
-        <p class="sub">Pick a name your teammates will recognise.</p>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% for category, message in messages %}<div class="flash{{ ' ok' if category == 'ok' }}" role="status">{{ message }}</div>{% endfor %}
-        {% endwith %}
-
+{% extends "auth_base.html" %}
+{% block title %}Sign up{% endblock %}
+{% block heading %}Join the <em>conversation</em>{% endblock %}
+{% block sub %}Pick a name your teammates will recognise.{% endblock %}
+{% block form %}
         <form method="POST">
             <div class="field">
                 <label for="username">Username</label>
@@ -44,30 +20,9 @@
                     <span id="req-number" class="req-item"><span class="req-icon">·</span>A number</span>
                 </div>
             </div>
-            <button type="submit" class="submit">Create account</button>
+            <button type="submit" class="submit"><span>Create account</span></button>
         </form>
+{% endblock %}
+{% block links %}
         <div class="links center"><span>Already have an account? <a href="/">Sign in</a></span></div>
-    </main>
-    <script>
-        function togglePw(btn) {
-            const input = btn.previousElementSibling;
-            const show = input.type === 'password';
-            input.type = show ? 'text' : 'password';
-            btn.textContent = show ? 'Hide' : 'Show';
-            btn.setAttribute('aria-pressed', show);
-        }
-        function updateReq(id, isValid) {
-            const el = document.getElementById(id);
-            if (!el) return;
-            el.classList.toggle('valid', isValid);
-            el.querySelector('.req-icon').textContent = isValid ? '✓' : '·';
-        }
-        function checkPassword() {
-            const pw = document.getElementById('password').value;
-            updateReq('req-length', pw.length >= 8);
-            updateReq('req-upper', /[A-Z]/.test(pw));
-            updateReq('req-number', /\d/.test(pw));
-        }
-    </script>
-</body>
-</html>
+{% endblock %}

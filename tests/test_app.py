@@ -200,3 +200,57 @@ def test_timestamps_are_utc():
     from datetime import datetime, timezone
     drift = abs((appmod.utcnow() - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds())
     assert drift < 5
+
+
+# ---------- chat list previews ----------
+
+def test_chat_previews_pick_newest_message_per_chat(client):
+    with appmod.app.app_context():
+        db, User, Message = appmod.db, appmod.User, appmod.Message
+        a, b, c = (User(username=n, password="x") for n in ("pia", "quin", "rex"))
+        db.session.add_all([a, b, c])
+        db.session.commit()
+        db.session.add_all([
+            Message(sender_id=a.id, receiver_id=b.id, content="first"),
+            Message(sender_id=b.id, receiver_id=a.id, content="  newest\n  reply "),
+            Message(sender_id=c.id, receiver_id=a.id, file_url="/x.jpg", file_type="image", file_name="x.jpg"),
+            Message(sender_id=a.id, receiver_id=a.id, content="note to self", is_deleted=True),
+            Message(sender_id=b.id, receiver_id=c.id, content="not mine"),
+        ])
+        db.session.commit()
+        gid = _make_group("crew", "pia", "quin")
+        db.session.add(Message(sender_id=b.id, group_id=gid, content="group hello"))
+        db.session.commit()
+
+        p = appmod.chat_previews(a.id, [gid])
+        assert p[f"dm:{b.id}"]["text"] == "newest reply"
+        assert p[f"dm:{b.id}"]["sender_id"] == b.id
+        assert p[f"dm:{c.id}"]["text"] == "📷 Photo"
+        assert p[f"dm:{a.id}"]["text"] == "Message deleted"
+        assert p[f"group:{gid}"]["text"] == "group hello"
+        assert p[f"group:{gid}"]["sender"] == "quin"
+        assert len(p) == 4  # quin -> rex is someone else's chat
+
+
+def test_dm_packet_names_the_receiver(client):
+    sender = _socket_for("sol")
+    _socket_for("tam")
+    with appmod.app.app_context():
+        tam_id = appmod.User.query.filter_by(username="tam").first().id
+    sender.emit("join_chat", {"type": "dm", "id": tam_id})
+    sender.get_received()
+    sender.emit("send_message", {"type": "dm", "id": tam_id, "message": "hi"})
+    packets = [e["args"][0] for e in sender.get_received() if e["name"] == "receive_message"]
+    assert packets and packets[0]["receiver_id"] == tam_id
+
+
+def test_typing_reaches_recipient_who_has_not_opened_the_chat(client):
+    sender = _socket_for("uma")
+    other = _socket_for("val")
+    with appmod.app.app_context():
+        val_id = appmod.User.query.filter_by(username="val").first().id
+    other.emit("register_user")   # what the page does on load: join the personal room, nothing else
+    other.get_received()
+    sender.emit("typing", {"type": "dm", "id": val_id})
+    typing = [e for e in other.get_received() if e["name"] == "user_typing"]
+    assert typing and typing[0]["args"][0]["username"] == "uma"
