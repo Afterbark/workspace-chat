@@ -103,9 +103,13 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'my_super_secret_key')
 # Capture cloud PostgreSQL database URL, fallback to local SQLite for offline dev
 db_url = os.environ.get('DATABASE_URL', 'sqlite:///chat.db')
 
-# Convert old 'postgres://' dialect format to SQLAlchemy compatible 'postgresql://'
-if db_url and db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
+# Pin the psycopg2 driver explicitly. Heroku hands out 'postgres://', and
+# SQLAlchemy 2.1+ maps a bare 'postgresql://' to psycopg (v3), which isn't
+# installed — psycopg2 is what requirements.txt and psycogreen rely on.
+for prefix in ("postgres://", "postgresql://"):
+    if db_url.startswith(prefix):
+        db_url = "postgresql+psycopg2://" + db_url[len(prefix):]
+        break
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 
