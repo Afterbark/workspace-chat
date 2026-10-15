@@ -16,7 +16,7 @@ COPY . .
 
 EXPOSE 8000
 
-# Single gevent worker — matches the Heroku Procfile. The app keeps presence
+# Single gevent-websocket worker (plain "gevent" breaks websockets) — matches the Heroku Procfile. The app keeps presence
 # state in memory and Socket.IO has no message queue, so do NOT raise -w above 1
 # without first adding Redis (SocketIO(message_queue=...)).
-CMD ["gunicorn", "--worker-class", "gevent", "-w", "1", "-b", "0.0.0.0:8000", "--access-logfile", "-", "app:app"]
+CMD ["gunicorn", "--worker-class", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker", "-w", "1", "-b", "0.0.0.0:8000", "--access-logfile", "-", "app:app"]
