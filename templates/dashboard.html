@@ -152,6 +152,9 @@
                 <h1 class="side-title">Chats</h1>
                 <button class="icon-btn mobile-only" aria-label="Jump to a chat" onclick="openCmdk()">{{ ic('search') }}</button>
                 <button class="icon-btn mobile-only" aria-label="Settings" onclick="openSettings()">{{ ic('settings') }}</button>
+                {% if is_admin %}
+                <button class="icon-btn mobile-only" aria-label="Approval requests" onclick="openRequests()" style="position:relative;">{{ ic('bell') }}<span class="badge requests-badge" style="display:none; position:absolute; top:-3px; right:-3px; background:var(--danger);">0</span></button>
+                {% endif %}
                 <button class="icon-btn solid" title="New group" aria-label="New group" onclick="openGroupModal()">{{ ic('compose') }}</button>
             </div>
             <label class="search-wrap">
@@ -1668,10 +1671,11 @@
 
         /* ---------- admin approval inbox ---------- */
         function renderRequestsBadge() {
-            const b = document.getElementById('requests-badge');
-            if (!b) return;
-            if (pendingRequests.length) { b.textContent = pendingRequests.length; b.style.display = 'inline-block'; }
-            else b.style.display = 'none';
+            // one badge on the desktop rail, one in the phone header
+            document.querySelectorAll('#requests-badge, .requests-badge').forEach(b => {
+                if (pendingRequests.length) { b.textContent = pendingRequests.length; b.style.display = 'inline-block'; }
+                else b.style.display = 'none';
+            });
         }
         function renderRequestsList() {
             const box = document.getElementById('requests-list');
