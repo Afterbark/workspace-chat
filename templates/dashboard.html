@@ -44,6 +44,17 @@
     'arrow': '<path d="M5 12h14M12 5l7 7-7 7"/>',
     'gif': '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M10 10H8a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h2v-2M13 10v4M16 14v-4h3M16 12h2"/>',
     'shield': '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+    'phone': '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
+    'video': '<path d="m22 8-6 4 6 4V8z"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
+    'videooff': '<path d="M10.66 6H14a2 2 0 0 1 2 2v2.34l1 1L22 8v8M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2l10 10zM2 2l20 20"/>',
+    'micoff': '<path d="M2 2l20 20M18.89 13.23A7 7 0 0 0 19 12v-2M5 10v2a7 7 0 0 0 12 5M15 9.34V5a3 3 0 0 0-5.68-1.33M9 9v3a3 3 0 0 0 5.12 2.12M12 19v3"/>',
+    'flip': '<path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5"/><circle cx="12" cy="12" r="3"/><path d="m18 22-3-3 3-3M6 2l3 3-3 3"/>',
+    'minimize': '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
+    'maximize': '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+    'media': '<path d="M18 22H4a2 2 0 0 1-2-2V6"/><path d="m22 13-1.3-1.3a2.4 2.4 0 0 0-3.4 0L11 18"/><circle cx="12" cy="8" r="2"/><rect x="6" y="2" width="16" height="16" rx="2"/>',
+    'link': '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    'calendar': '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    'play': '<path d="M7 4.5v15l12-7.5z"/>',
 } -%}
 {%- macro ic(name) -%}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">{{ ICONS[name]|safe }}</svg>{%- endmacro -%}
 {%- set my_avatar = avatar_url(current_user.profile_pic, current_user.username) %}
@@ -74,7 +85,7 @@
         }
     </script>
     <link rel="apple-touch-icon" href="/static/icon.svg">
-    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v=nebula-3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v=nebula-4">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@1/index.js"></script>
 </head>
@@ -82,6 +93,30 @@
     <div class="aurora" aria-hidden="true"><i></i><i></i><i></i><i></i><div class="stars"></div><div class="stars"></div></div>
     <div id="toast-container"></div>
     <div id="lightbox" onclick="this.style.display='none'"><img src="" alt=""></div>
+
+    <!-- ===== call screen ===== -->
+    <div id="call-overlay" hidden role="dialog" aria-label="Call">
+        <div class="call-bg" id="call-bg"></div>
+        <video id="call-remote-video" autoplay playsinline></video>
+        <audio id="call-remote-audio" autoplay></audio>
+        <div class="call-who">
+            <div class="call-ring"><img id="call-avatar" src="" alt="" onerror="avatarFallback(this)"><i></i><i></i><i></i></div>
+            <div class="call-meta"><div class="call-name" id="call-name"></div><div class="call-state" id="call-state"></div></div>
+            <div class="call-peer-flags" id="call-peer-flags"></div>
+        </div>
+        <video id="call-local-video" autoplay playsinline muted></video>
+        <button class="call-mini-toggle" id="call-mini-toggle" onclick="toggleCallMini()" aria-label="Minimize call">{{ ic('minimize') }}</button>
+        <div class="call-controls" id="call-controls-live">
+            <button class="call-btn" id="call-mic-btn" onclick="toggleCallMic()" aria-label="Mute microphone">{{ ic('mic') }}</button>
+            <button class="call-btn" id="call-cam-btn" onclick="toggleCallCam()" aria-label="Turn camera off">{{ ic('video') }}</button>
+            <button class="call-btn" id="call-flip-btn" onclick="flipCallCamera()" aria-label="Switch camera">{{ ic('flip') }}</button>
+            <button class="call-btn end" onclick="hangUpCall()" aria-label="End call">{{ ic('phone') }}</button>
+        </div>
+        <div class="call-controls incoming" id="call-controls-incoming">
+            <div class="cc-col"><button class="call-btn end big" onclick="declineCall()" aria-label="Decline">{{ ic('phone') }}</button><span>Decline</span></div>
+            <div class="cc-col"><button class="call-btn accept big" id="call-accept-btn" onclick="acceptCall()" aria-label="Accept">{{ ic('phone') }}</button><span>Accept</span></div>
+        </div>
+    </div>
     <div id="react-palette"></div>
     <div id="hover-card"></div>
 
@@ -247,6 +282,7 @@
                 <button class="cc-close" onclick="clearComposerContext()" aria-label="Cancel">&times;</button>
             </div>
             <div id="priority-chip"><span id="pc-text"></span><button class="pc-x" onclick="setPriority('normal')" title="Remove priority" aria-label="Remove priority">&times;</button></div>
+            <button id="sched-pill" type="button" hidden onclick="openSchedule(true)">{{ ic('clock') }}<span id="sched-pill-text"></span></button>
             <div class="input-controls">
                 <input type="file" id="chat-file-input" onchange="handleFiles(this.files)">
                 <button id="plus-btn" class="compose-btn" onclick="toggleComposerMenu()" disabled title="More: GIF, schedule, praise, priority" aria-label="More options">{{ ic('plus') }}</button>
@@ -444,6 +480,40 @@
             <textarea id="praise-note" placeholder="Add a note (optional)" rows="2" style="resize:vertical;"></textarea>
             <button type="button" class="modal-btn primary" style="width:100%; margin-top:4px;" onclick="sendPraise()">Send praise</button>
             <button type="button" class="modal-btn ghost" style="width:100%; margin-top:8px;" onclick="document.getElementById('praiseModal').style.display='none'">Cancel</button>
+        </div>
+    </div>
+
+    <div id="scheduleModal" class="modal">
+        <div class="modal-content sched-sheet">
+            <button class="modal-close" onclick="closeSchedule()" aria-label="Close">&times;</button>
+            <h3>Schedule message</h3>
+            <textarea id="sched-text" rows="3" dir="auto" placeholder="Write the message to send later" oninput="renderSchedWhen()"></textarea>
+            <div class="sched-label">When</div>
+            <div class="sched-quick" id="sched-quick"></div>
+            <div class="sched-custom">
+                <label class="sched-field">{{ ic('calendar') }}<input type="date" id="sched-date" onchange="pickSchedCustom()"></label>
+                <label class="sched-field">{{ ic('clock') }}<input type="time" id="sched-time" step="300" onchange="pickSchedCustom()"></label>
+            </div>
+            <div class="sched-when" id="sched-when"></div>
+            <button class="modal-btn primary" id="sched-go" style="width:100%;" onclick="submitSchedule()">Schedule</button>
+            <div class="sched-list-wrap" id="sched-list-wrap" hidden>
+                <div class="sched-label">Scheduled in this chat</div>
+                <div id="sched-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="mediaModal" class="modal">
+        <div class="modal-content media-sheet">
+            <button class="modal-close" onclick="document.getElementById('mediaModal').style.display='none'" aria-label="Close">&times;</button>
+            <h3>Shared media</h3>
+            <div class="media-sub" id="media-sub"></div>
+            <div class="chips media-tabs" role="tablist" aria-label="Shared media">
+                <button class="chip active" data-tab="media" onclick="setMediaTab('media')">Photos &amp; videos <span class="chip-count" id="mc-media"></span></button>
+                <button class="chip" data-tab="files" onclick="setMediaTab('files')">Files <span class="chip-count" id="mc-files"></span></button>
+                <button class="chip" data-tab="links" onclick="setMediaTab('links')">Links <span class="chip-count" id="mc-links"></span></button>
+            </div>
+            <div class="media-body" id="media-body"></div>
         </div>
     </div>
 
@@ -805,7 +875,7 @@
         }
         function setListFilter(f) {
             listFilter = f;
-            document.querySelectorAll('.chips .chip').forEach(c => c.classList.toggle('active', c.dataset.f === f));
+            document.querySelectorAll('.chip[data-f]').forEach(c => c.classList.toggle('active', c.dataset.f === f));
             applyListFilter();
         }
         function applyListFilter() {
@@ -1565,6 +1635,7 @@
             document.getElementById('chat-title').textContent = 'Select a chat to begin';
             document.getElementById('chat-subtitle').textContent = '';
             document.getElementById('header-actions').innerHTML = '';
+            document.getElementById('sched-pill').hidden = true;
             document.getElementById('menu-wrap').style.display = 'none';
             document.getElementById('pinned-banner').style.display = 'none';
             hideHeaderAvatar();
@@ -1766,7 +1837,7 @@
             const menu = document.getElementById('chat-menu');
             const muted = mutedChats.has(chatKey());
             const archived = archivedChats.has(chatKey());
-            let html = '';
+            let html = `<button onclick="openSharedMedia()">${ICON.media} Shared media</button>`;
             if (currentChatType === 'group') html += `<button onclick="closeChatMenu(); viewParticipants()">${ICON.users} Group settings</button>`;
             html += `<button onclick="doMute()">${muted ? ICON.bell : ICON.belloff} ${muted ? 'Unmute' : 'Mute'} notifications</button>
                      <button onclick="doArchive()">${ICON.archive} ${archived ? 'Unarchive' : 'Archive'} chat</button>
@@ -1920,21 +1991,557 @@
         }
 
         /* ---------- scheduled messages ---------- */
-        function openSchedule() {
-            const input = document.getElementById('message-input');
-            const text = input.value.trim();
-            if (!text) { alert('Type your message first, then schedule it.'); return; }
-            const when = prompt('Send at (YYYY-MM-DD HH:MM, your local time):');
-            if (!when) return;
-            const dt = new Date(when.replace(' ', 'T'));
-            if (isNaN(dt.getTime()) || dt < new Date()) { alert('Please enter a valid future date/time.'); return; }
-            socket.emit('schedule_message', { type: currentChatType, id: currentChatId, message: text, send_at: dt.toISOString() });
-            input.value = '';
+        // Times are picked and shown in Amman time, like every other time in the app.
+        const schedLists = {};            // "type:id" -> [{id, content, send_at}]
+        let schedPick = null, schedFromComposer = false;
+        const pad2 = n => String(n).padStart(2, '0');
+        function ammanParts(d) {
+            const o = {};
+            new Intl.DateTimeFormat('en-US', { timeZone: APP_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short' }).formatToParts(d).forEach(p => { o[p.type] = p.value; });
+            return { y: +o.year, mo: +o.month, d: +o.day, h: (+o.hour) % 24, mi: +o.minute, wd: o.weekday };
         }
-        socket.on('scheduled_ack', function(data) {
-            const d = new Date(data.send_at);
-            showToast('Scheduled', `Message will send ${d.toLocaleString()}`);
+        // An Amman wall-clock time -> the actual instant.
+        function ammanDate(y, mo, d, h, mi) {
+            const want = Date.UTC(y, mo - 1, d, h, mi);
+            let t = want;
+            for (let i = 0; i < 2; i++) { const p = ammanParts(new Date(t)); t += want - Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi); }
+            return new Date(t);
+        }
+        function fmtSched(d) {
+            const t = d.toLocaleTimeString('en-US', { timeZone: APP_TZ, hour: 'numeric', minute: '2-digit' });
+            const key = ammanDayKey(d);
+            const day = key === ammanDayKey(new Date()) ? 'Today'
+                : key === ammanDayKey(new Date(Date.now() + 86400000)) ? 'Tomorrow'
+                : d.toLocaleDateString('en-US', { timeZone: APP_TZ, weekday: 'short', month: 'short', day: 'numeric' });
+            return `${day} at ${t}`;
+        }
+        function relIn(d) {
+            const m = Math.round((d - Date.now()) / 60000);
+            if (m < 1) return 'in under a minute';
+            if (m < 60) return `in ${m} min`;
+            const h = Math.round(m / 60);
+            if (h < 36) return `in ${h} hour${h === 1 ? '' : 's'}`;
+            return `in ${Math.round(m / 1440)} days`;
+        }
+        function schedOptions() {
+            const now = new Date(), p = ammanParts(now), opts = [];
+            opts.push({ label: 'In 1 hour', d: new Date(Math.ceil((now.getTime() + 3600000) / 300000) * 300000) });
+            if (p.h < 17) opts.push({ label: 'This evening', d: ammanDate(p.y, p.mo, p.d, 18, 0) });
+            else if (p.h < 20) opts.push({ label: 'Tonight', d: ammanDate(p.y, p.mo, p.d, 21, 0) });
+            const t = ammanParts(new Date(now.getTime() + 86400000));
+            opts.push({ label: 'Tomorrow morning', d: ammanDate(t.y, t.mo, t.d, 9, 0) });
+            // the work week here starts on Sunday
+            const toSun = (7 - ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.wd)) % 7 || 7;
+            if (toSun > 1) { const s = ammanParts(new Date(now.getTime() + toSun * 86400000)); opts.push({ label: 'Sunday morning', d: ammanDate(s.y, s.mo, s.d, 9, 0) }); }
+            return opts;
+        }
+        let schedOpts = [];
+        function renderSchedQuick() {
+            schedOpts = schedOptions();
+            document.getElementById('sched-quick').innerHTML = schedOpts.map((o, i) =>
+                `<button type="button" class="sq-opt${schedPick && +schedPick === +o.d ? ' active' : ''}" onclick="pickSchedQuick(${i})"><b>${o.label}</b><span>${escapeHtml(fmtSched(o.d))}</span></button>`).join('');
+        }
+        function setSchedInputs(d) {
+            const p = ammanParts(d);
+            document.getElementById('sched-date').value = `${p.y}-${pad2(p.mo)}-${pad2(p.d)}`;
+            document.getElementById('sched-time').value = `${pad2(p.h)}:${pad2(p.mi)}`;
+        }
+        function pickSchedQuick(i) {
+            schedPick = schedOpts[i].d;
+            setSchedInputs(schedPick);
+            renderSchedQuick(); renderSchedWhen();
+        }
+        function pickSchedCustom() {
+            const dEl = document.getElementById('sched-date'), tEl = document.getElementById('sched-time');
+            const today = ammanParts(new Date());
+            if (!dEl.value && tEl.value) dEl.value = `${today.y}-${pad2(today.mo)}-${pad2(today.d)}`;
+            if (dEl.value && !tEl.value) tEl.value = '09:00';
+            if (!dEl.value || !tEl.value) { schedPick = null; renderSchedWhen(); return; }
+            const [y, mo, d] = dEl.value.split('-').map(Number), [h, mi] = tEl.value.split(':').map(Number);
+            schedPick = ammanDate(y, mo, d, h, mi);
+            renderSchedQuick(); renderSchedWhen();
+        }
+        function renderSchedWhen() {
+            const el = document.getElementById('sched-when'), go = document.getElementById('sched-go');
+            const hasText = !!document.getElementById('sched-text').value.trim();
+            const otherTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone !== APP_TZ; } catch (e) { return false; } })();
+            el.classList.remove('bad');
+            if (!schedPick) { el.innerHTML = 'Pick a time above, or set your own date and time.'; go.disabled = true; return; }
+            if (schedPick - Date.now() < 30000) { el.textContent = 'That time has already passed.'; el.classList.add('bad'); go.disabled = true; return; }
+            if (schedPick - Date.now() > 365 * 86400000) { el.textContent = 'Pick a time within the next year.'; el.classList.add('bad'); go.disabled = true; return; }
+            el.innerHTML = `${ICON.clock}<span>Sends <b>${escapeHtml(fmtSched(schedPick))}</b> · ${relIn(schedPick)}${otherTz ? ' (Amman time)' : ''}</span>`;
+            go.disabled = !hasText;
+            go.textContent = hasText ? 'Schedule' : 'Write a message first';
+        }
+        function openSchedule(fromPill) {
+            if (!currentChatId) return;
+            const input = document.getElementById('message-input'), ta = document.getElementById('sched-text');
+            schedFromComposer = !fromPill && !!input.value.trim();
+            ta.value = fromPill ? '' : input.value.trim();
+            schedPick = null;
+            const t = ammanParts(new Date());
+            const dEl = document.getElementById('sched-date');
+            dEl.min = `${t.y}-${pad2(t.mo)}-${pad2(t.d)}`; dEl.value = ''; document.getElementById('sched-time').value = '';
+            renderSchedQuick(); renderSchedWhen(); renderSchedList();
+            document.getElementById('scheduleModal').style.display = 'block';
+            socket.emit('get_scheduled', { type: currentChatType, id: currentChatId });
+            if (!isPhone() && !ta.value) setTimeout(() => ta.focus(), 60);
+        }
+        function closeSchedule() { document.getElementById('scheduleModal').style.display = 'none'; }
+        function submitSchedule() {
+            const text = document.getElementById('sched-text').value.trim();
+            if (!text || !schedPick || schedPick - Date.now() < 30000) return;
+            socket.emit('schedule_message', { type: currentChatType, id: currentChatId, message: text, send_at: schedPick.toISOString() });
+            if (schedFromComposer) {
+                const input = document.getElementById('message-input');
+                input.value = ''; input.style.height = ''; syncComposer();
+            }
+            schedFromComposer = false;
+            document.getElementById('sched-text').value = '';
+            schedPick = null; renderSchedQuick(); renderSchedWhen();
+            closeSchedule();
+        }
+        socket.on('scheduled_ack', function (data) {
+            if (data.ok) showToast('Message scheduled', `Sends ${fmtSched(new Date(data.send_at))}`);
+            else showToast("Couldn't schedule", data.error || 'Please pick another time.');
         });
+        socket.on('scheduled_list', function (d) {
+            schedLists[`${d.type}:${d.id}`] = d.items || [];
+            if (d.type === currentChatType && d.id === currentChatId) {
+                renderSchedPill();
+                if (document.getElementById('scheduleModal').style.display === 'block') renderSchedList();
+            }
+        });
+        function currentSched() { return schedLists[`${currentChatType}:${currentChatId}`] || []; }
+        function renderSchedPill() {
+            const pill = document.getElementById('sched-pill'), items = currentSched();
+            if (!currentChatId || !items.length) { pill.hidden = true; return; }
+            const next = fmtSched(new Date(items[0].send_at));
+            document.getElementById('sched-pill-text').textContent = items.length === 1 ? `1 scheduled · ${next}` : `${items.length} scheduled · next ${next}`;
+            pill.hidden = false;
+        }
+        function renderSchedList() {
+            const items = currentSched(), wrap = document.getElementById('sched-list-wrap');
+            wrap.hidden = !items.length;
+            document.getElementById('sched-list').innerHTML = items.map(it => `
+                <div class="sl-row" data-id="${it.id}">
+                    <div class="sl-body"><div class="sl-when">${ICON.clock}${escapeHtml(fmtSched(new Date(it.send_at)))}</div><div class="sl-text" dir="auto">${escapeHtml(it.content)}</div></div>
+                    <div class="sl-actions">
+                        <button type="button" class="modal-btn ghost sl-now" onclick="sendScheduledNow(${it.id})">Send now</button>
+                        <button type="button" class="remove-btn sl-cancel" onclick="cancelScheduled(${it.id}, this)">Cancel</button>
+                    </div>
+                </div>`).join('');
+        }
+        function sendScheduledNow(id) { socket.emit('send_scheduled_now', { id: id }); }
+        function cancelScheduled(id, btn) {
+            if (!btn.classList.contains('confirm')) {   // two taps, so a stray tap can't throw a message away
+                btn.classList.add('confirm'); btn.textContent = 'Tap to confirm';
+                setTimeout(() => { if (btn.isConnected) { btn.classList.remove('confirm'); btn.textContent = 'Cancel'; } }, 3000);
+                return;
+            }
+            socket.emit('cancel_scheduled', { id: id });
+        }
+
+        /* ---------- shared media: photos, files and links in this chat ---------- */
+        let mediaData = null, mediaTab = 'media';
+        function openSharedMedia() {
+            if (!currentChatId) return;
+            closeChatMenu();
+            mediaData = null;
+            document.getElementById('media-sub').textContent = document.getElementById('chat-title').textContent;
+            ['media', 'files', 'links'].forEach(k => { document.getElementById('mc-' + k).textContent = ''; });
+            setMediaTab('media');
+            document.getElementById('mediaModal').style.display = 'block';
+            socket.emit('get_shared_media', { type: currentChatType, id: currentChatId });
+        }
+        socket.on('shared_media', function (d) {
+            if (d.type !== currentChatType || d.id !== currentChatId) return;
+            mediaData = d;
+            ['media', 'files', 'links'].forEach(k => { document.getElementById('mc-' + k).textContent = d[k].length || ''; });
+            renderMedia();
+        });
+        function setMediaTab(t) {
+            mediaTab = t;
+            document.querySelectorAll('.media-tabs .chip').forEach(c => c.classList.toggle('active', c.dataset.tab === t));
+            renderMedia();
+        }
+        function mediaWhen(iso) { return new Date(iso).toLocaleDateString('en-US', { timeZone: APP_TZ, month: 'short', day: 'numeric' }); }
+        function byMonth(items) {
+            const out = [];
+            items.forEach(it => {
+                const m = new Date(it.ts).toLocaleDateString('en-US', { timeZone: APP_TZ, month: 'long', year: 'numeric' });
+                if (!out.length || out[out.length - 1][0] !== m) out.push([m, []]);
+                out[out.length - 1][1].push(it);
+            });
+            return out;
+        }
+        function renderMedia() {
+            const body = document.getElementById('media-body');
+            if (!mediaData) {
+                body.innerHTML = '<div class="media-grid">' + Array.from({ length: 9 }, (_, i) => `<span class="mg-tile sk-tile" style="animation-delay:${i * .05}s"></span>`).join('') + '</div>';
+                return;
+            }
+            const items = mediaData[mediaTab] || [];
+            if (!items.length) {
+                const empty = { media: ['image', 'No photos or videos yet', 'Pictures and videos shared here will collect in this tab.'],
+                                files: ['file', 'No files yet', 'Documents and voice messages shared here will show up in this tab.'],
+                                links: ['link', 'No links yet', 'Links people post here will be gathered in this tab.'] }[mediaTab];
+                body.innerHTML = `<div class="media-empty"><span class="me-ic">${ICON[empty[0]]}</span><b>${empty[1]}</b><span>${empty[2]}</span></div>`;
+                return;
+            }
+            body.innerHTML = byMonth(items).map(([month, list]) => {
+                let inner;
+                if (mediaTab === 'media') {
+                    inner = '<div class="media-grid">' + list.map(it => {
+                        const tip = escapeHtml(`${it.sender} · ${mediaWhen(it.ts)}`);
+                        if (it.kind === 'video') return `<a class="mg-tile vid" href="${escapeHtml(it.url)}" target="_blank" rel="noopener" title="${tip}"><video src="${escapeHtml(it.url)}#t=0.1" preload="metadata" muted playsinline></video><span class="mg-play">${ICON.play}</span></a>`;
+                        const src = escapeHtml(proxiedGif(it.url));
+                        return `<button type="button" class="mg-tile" title="${tip}" onclick="openLightbox('${src}')"><img src="${src}" loading="lazy" alt="" onerror="this.parentNode.classList.add('broken')">${it.kind === 'gif' ? '<span class="mg-gif">GIF</span>' : ''}</button>`;
+                    }).join('') + '</div>';
+                } else if (mediaTab === 'files') {
+                    inner = list.map(it => {
+                        const voice = it.kind === 'voice';
+                        const name = voice ? 'Voice message' : (it.name || 'File');
+                        const ext = voice ? '' : ((it.name || '').split('.').pop() || '').slice(0, 4).toUpperCase();
+                        return `<a class="mf-row" href="${escapeHtml(it.url)}" target="_blank" rel="noopener" ${voice ? '' : 'download'}>
+                            <span class="mf-ic${voice ? ' voice' : ''}">${voice ? ICON.mic : (ext ? `<b>${escapeHtml(ext)}</b>` : ICON.file)}</span>
+                            <span class="mf-body"><span class="mf-name">${escapeHtml(name)}</span><span class="mf-meta">${escapeHtml(it.sender)} · ${mediaWhen(it.ts)}</span></span>
+                            <span class="mf-go">${voice ? ICON.play : ICON.download}</span></a>`;
+                    }).join('');
+                } else {
+                    inner = list.map(it => {
+                        const letter = `<b>${escapeHtml((it.domain || '?')[0].toUpperCase())}</b>`;
+                        const thumb = letter + (it.image ? `<img src="${escapeHtml(it.image)}" alt="" loading="lazy" onerror="this.remove()">` : '');
+                        return `<a class="ml-row" href="${escapeHtml(it.url)}" target="_blank" rel="noopener noreferrer">
+                            <span class="ml-thumb">${thumb}</span>
+                            <span class="mf-body"><span class="mf-name">${escapeHtml(it.title || it.url)}</span><span class="mf-meta">${escapeHtml(it.domain)} · ${escapeHtml(it.sender)} · ${mediaWhen(it.ts)}</span></span>
+                            <span class="mf-go">${ICON.arrow}</span></a>`;
+                    }).join('');
+                }
+                return `<div class="mg-month">${escapeHtml(month)}</div>${inner}`;
+            }).join('');
+        }
+
+        /* ---------- voice & video calls (one-to-one, WebRTC) ---------- */
+        // Sound and video travel straight between the two browsers; the server only rings the
+        // other person and passes the connection details (offer / answer / candidates) across.
+        const ICE_SERVERS = {{ ice_servers|tojson }};
+        const call = { state: 'idle', id: null, peerId: null, peerName: '', kind: 'audio', role: null, pc: null,
+                       local: null, remote: null, pendingIce: [], tick: null, startedAt: 0, mic: true, cam: true,
+                       facing: 'user', peerMic: true, peerCam: true, ring: null, token: 0 };
+        const callEl = id => document.getElementById(id);
+        function callLabel(kind) { return kind === 'video' ? 'video call' : 'voice call'; }
+        function fmtDur(ms) {
+            const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+            return (h ? `${h}:${pad2(m)}` : `${m}`) + `:${pad2(s % 60)}`;
+        }
+        function setCallState(text) { callEl('call-state').textContent = text; }
+        function showCallScreen(state) {
+            const o = callEl('call-overlay');
+            call.state = state;
+            o.dataset.state = state; o.dataset.kind = call.kind;
+            o.hidden = false;
+            callEl('call-name').textContent = call.peerName;
+            const av = avatarFor(call.peerId, call.peerName);
+            callEl('call-avatar').src = av; callEl('call-avatar').dataset.uname = call.peerName;
+            callEl('call-bg').style.backgroundImage = `url("${av}")`;
+            callEl('call-flip-btn').hidden = !(call.kind === 'video' && ('ontouchstart' in window || isPhone()));
+            callEl('call-cam-btn').hidden = call.kind !== 'video';
+            if (state === 'incoming') callEl('call-accept-btn').innerHTML = call.kind === 'video' ? ICON.video : ICON.phone;
+            const mini = o.classList.contains('mini');
+            callEl('call-mini-toggle').innerHTML = mini ? ICON.maximize : ICON.minimize;
+            callEl('call-mini-toggle').setAttribute('aria-label', mini ? 'Expand call' : 'Minimize call');
+            renderCallButtons2();
+        }
+        function renderCallButtons2() {
+            const mic = callEl('call-mic-btn'), cam = callEl('call-cam-btn');
+            mic.classList.toggle('off', !call.mic); mic.innerHTML = call.mic ? ICON.mic : ICON.micoff;
+            mic.setAttribute('aria-label', call.mic ? 'Mute microphone' : 'Unmute microphone');
+            cam.classList.toggle('off', !call.cam); cam.innerHTML = call.cam ? ICON.video : ICON.videooff;
+            cam.setAttribute('aria-label', call.cam ? 'Turn camera off' : 'Turn camera on');
+            callEl('call-overlay').classList.toggle('self-cam-off', !call.cam);
+        }
+        function renderPeerFlags() {
+            const flags = [];
+            if (!call.peerMic) flags.push(`${ICON.micoff}<span>${escapeHtml(call.peerName)} is muted</span>`);
+            if (call.kind === 'video' && !call.peerCam && call.state === 'live') flags.push(`${ICON.videooff}<span>Camera off</span>`);
+            callEl('call-peer-flags').innerHTML = flags.map(f => `<span class="cpf">${f}</span>`).join('');
+            callEl('call-overlay').classList.toggle('peer-cam-off', !call.peerCam);
+        }
+        function mediaErrorText(e) {
+            const n = e && e.name;
+            if (n === 'NotAllowedError' || n === 'SecurityError') return 'Allow camera and microphone access for this site in your browser, then try again.';
+            if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'No camera or microphone was found on this device.';
+            if (n === 'NotReadableError') return 'Another app is using your camera or microphone.';
+            if (e && e.message === 'insecure') return 'Calls need a secure (https) connection.';
+            return 'Your camera or microphone could not be started.';
+        }
+        async function getCallMedia(kind) {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('insecure');
+            return navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+                video: kind === 'video' ? { facingMode: call.facing, width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+            });
+        }
+        function attachLocal() {
+            const v = callEl('call-local-video');
+            v.srcObject = call.kind === 'video' ? call.local : null;
+            v.classList.toggle('mirror', call.facing === 'user');
+            call.cam = call.kind === 'video' && call.local.getVideoTracks().length > 0;
+            renderCallButtons2();
+        }
+        function attachRemote(stream) {
+            call.remote = stream;
+            const a = callEl('call-remote-audio'), v = callEl('call-remote-video');
+            if (a.srcObject !== stream) { a.srcObject = stream; a.play().catch(() => {}); }
+            if (stream.getVideoTracks().length) {
+                v.muted = true;   // sound plays through the <audio>; the video only shows the picture
+                if (v.srcObject !== stream) { v.srcObject = stream; v.play().catch(() => {}); }
+                callEl('call-overlay').classList.add('has-remote-video');
+            }
+        }
+
+        // sounds: a two-note ring for incoming calls, a soft ringback while calling out
+        function callTone(freqs, len, vol) {
+            if (!audioCtx || notifVolume <= 0) return;
+            const t0 = audioCtx.currentTime, peak = vol * notifVolume;
+            freqs.forEach(f => {
+                const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
+                osc.type = 'sine'; osc.frequency.value = f; osc.connect(g); g.connect(audioCtx.destination);
+                g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(peak, t0 + 0.04);
+                g.gain.setValueAtTime(peak, t0 + len - 0.08); g.gain.exponentialRampToValueAtTime(0.0001, t0 + len);
+                osc.start(t0); osc.stop(t0 + len + 0.02);
+            });
+        }
+        function stopCallSounds() { clearInterval(call.ring); call.ring = null; if (navigator.vibrate) navigator.vibrate(0); }
+        function startRingtone() {
+            stopCallSounds();
+            if (!audioCtx) { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+            const play = () => {
+                callTone([784, 1175], 0.22, 0.22); setTimeout(() => callTone([988, 1319], 0.3, 0.22), 260);
+                if (navigator.vibrate) navigator.vibrate([400, 200, 400]);
+            };
+            play(); call.ring = setInterval(play, 2400);
+        }
+        function startRingback() {
+            stopCallSounds();
+            const play = () => callTone([440, 480], 1.4, 0.06);
+            play(); call.ring = setInterval(play, 4000);
+        }
+
+        function sendSignal(data) { if (call.id) socket.emit('call_signal', { call_id: call.id, data: data }); }
+        function sendMediaState() { sendSignal({ type: 'state', mic: call.mic, cam: call.cam }); }
+        function createPeer() {
+            const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+            call.pc = pc; call.pendingIce = [];
+            call.local.getTracks().forEach(t => pc.addTrack(t, call.local));
+            if (call.kind === 'video' && !call.local.getVideoTracks().length) pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.onicecandidate = e => { if (e.candidate) sendSignal({ type: 'candidate', candidate: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate }); };
+            pc.ontrack = e => attachRemote(e.streams[0] || new MediaStream([e.track]));
+            const watch = () => {
+                if (call.pc !== pc) return;
+                const st = pc.connectionState || pc.iceConnectionState;
+                if (st === 'connected' || st === 'completed') callConnected();
+                else if (st === 'disconnected' && call.state === 'live') setCallState('Reconnecting…');
+                else if (st === 'failed') {
+                    showToast("Call couldn't connect", 'One of your networks blocks direct calls. Try again on a different Wi-Fi or mobile data.');
+                    hangUpCall();
+                }
+            };
+            pc.onconnectionstatechange = watch;
+            pc.oniceconnectionstatechange = watch;
+        }
+        async function flushIce() {
+            const list = call.pendingIce; call.pendingIce = [];
+            for (const c of list) { try { await call.pc.addIceCandidate(c); } catch (e) {} }
+        }
+        function callConnected() {
+            if (call.state === 'live') { if (call.tick) setCallState(fmtDur(Date.now() - call.startedAt)); return; }
+            stopCallSounds();
+            call.startedAt = Date.now();
+            showCallScreen('live');
+            setCallState('0:00');
+            clearInterval(call.tick);
+            call.tick = setInterval(() => { if (call.state === 'live' && call.pc && ['connected', 'completed'].includes(call.pc.connectionState || call.pc.iceConnectionState)) setCallState(fmtDur(Date.now() - call.startedAt)); }, 1000);
+            sendMediaState();
+        }
+
+        async function startCall(kind) {
+            if (currentChatType !== 'dm' || !currentChatId || currentChatId === myUserId) return;
+            if (call.state !== 'idle') { showToast('Already on a call', 'Hang up first to start a new one.'); return; }
+            if (blockedIds.has(currentChatId)) { showToast("Can't call", 'Unblock this person to call them.'); return; }
+            initInteractions();
+            const token = ++call.token;
+            Object.assign(call, { id: null, peerId: currentChatId, peerName: userNames[currentChatId] || document.getElementById('chat-title').textContent,
+                                  kind: kind, role: 'caller', mic: true, cam: kind === 'video', facing: 'user', peerMic: true, peerCam: true });
+            showCallScreen('outgoing'); renderPeerFlags();
+            setCallState(kind === 'video' ? 'Starting camera…' : 'Starting…');
+            try { call.local = await getCallMedia(kind); }
+            catch (e) { if (token === call.token) { endCallUi(); showToast(kind === 'video' ? "Can't use your camera" : "Can't use your microphone", mediaErrorText(e)); } return; }
+            if (token !== call.token || call.state !== 'outgoing') { call.local.getTracks().forEach(t => t.stop()); return; }
+            attachLocal();
+            setCallState('Calling…');
+            socket.emit('call_invite', { to: call.peerId, kind: kind }, resp => {
+                if (resp && resp.ok && (token !== call.token || call.state !== 'outgoing')) { socket.emit('call_hangup', { call_id: resp.call_id }); return; }
+                if (token !== call.token) return;
+                if (!resp || !resp.ok) {
+                    const name = call.peerName;
+                    const why = { offline: `${name} is offline right now. They'll see a missed call.`, busy: `${name} is on another call.`,
+                                  blocked: "You can't call this person.", self_busy: 'You already have a call going in another tab.' }[resp && resp.reason] || 'Please try again.';
+                    endCallUi(); showToast("Call didn't go through", why); return;
+                }
+                call.id = resp.call_id;
+                setCallState('Ringing…'); startRingback();
+            });
+        }
+        socket.on('call_incoming', function (d) {
+            if (call.state !== 'idle') return;
+            const token = ++call.token;
+            Object.assign(call, { id: d.call_id, peerId: d.from_id, peerName: d.from_name, kind: d.kind, role: 'callee',
+                                  mic: true, cam: d.kind === 'video', facing: 'user', peerMic: true, peerCam: true, local: null });
+            callEl('call-overlay').classList.remove('mini');
+            showCallScreen('incoming'); renderPeerFlags();
+            setCallState(`Incoming ${callLabel(d.kind)}`);
+            startRingtone();
+            browserNotify(`${d.from_name} is calling you`, `Incoming ${callLabel(d.kind)}`);
+        });
+        async function acceptCall() {
+            if (call.state !== 'incoming') return;
+            const token = call.token;
+            stopCallSounds(); initInteractions();
+            showCallScreen('connecting'); setCallState('Connecting…');
+            try { call.local = await getCallMedia(call.kind); }
+            catch (e) {
+                let ok = false;
+                if (call.kind === 'video') { try { call.local = await getCallMedia('audio'); ok = true; showToast('Joined without video', mediaErrorText(e)); } catch (e2) {} }
+                if (!ok) { if (token === call.token && call.id) socket.emit('call_decline', { call_id: call.id }); if (token === call.token) endCallUi(); showToast("Can't use your microphone", mediaErrorText(e)); return; }
+            }
+            if (token !== call.token || call.state !== 'connecting') { call.local.getTracks().forEach(t => t.stop()); return; }
+            attachLocal();
+            createPeer();
+            socket.emit('call_accept', { call_id: call.id }, resp => {
+                if (token === call.token && (!resp || !resp.ok)) { endCallUi(); showToast('Call ended', 'This call was no longer ringing.'); }
+            });
+        }
+        function declineCall() {
+            if (call.state !== 'incoming') return;
+            socket.emit('call_decline', { call_id: call.id });
+            endCallUi();
+        }
+        function hangUpCall() {
+            if (call.state === 'idle') return;
+            if (call.id) socket.emit('call_hangup', { call_id: call.id });
+            endCallUi(call.state === 'live' ? `Call ended · ${fmtDur(Date.now() - call.startedAt)}` : null);
+        }
+        socket.on('call_accepted', async function (d) {
+            if (d.call_id !== call.id || call.role !== 'caller' || call.state !== 'outgoing') return;
+            stopCallSounds();
+            showCallScreen('connecting'); setCallState('Connecting…');
+            createPeer();
+            try {
+                const offer = await call.pc.createOffer();
+                await call.pc.setLocalDescription(offer);
+                sendSignal({ type: 'offer', sdp: call.pc.localDescription.sdp });
+            } catch (e) { hangUpCall(); showToast("Call couldn't connect", 'Please try again.'); }
+        });
+        socket.on('call_signal', async function (d) {
+            if (d.call_id !== call.id || !call.pc) return;
+            const m = d.data || {}, pc = call.pc;
+            try {
+                if (m.type === 'offer') {
+                    await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp }); await flushIce();
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    sendSignal({ type: 'answer', sdp: pc.localDescription.sdp });
+                } else if (m.type === 'answer') {
+                    await pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }); await flushIce();
+                } else if (m.type === 'candidate' && m.candidate) {
+                    if (pc.remoteDescription) await pc.addIceCandidate(m.candidate).catch(() => {});
+                    else call.pendingIce.push(m.candidate);
+                } else if (m.type === 'state') {
+                    call.peerMic = m.mic !== false; call.peerCam = m.cam !== false; renderPeerFlags();
+                }
+            } catch (e) {}
+        });
+        socket.on('call_taken', function (d) {
+            if (d.call_id === call.id && call.state === 'incoming') endCallUi();   // answered on another device
+        });
+        socket.on('call_ended', function (d) {
+            if (d.call_id !== call.id || call.state === 'idle') return;
+            const name = call.peerName;
+            const missed = call.role === 'callee' && call.state === 'incoming';
+            const text = { declined: call.role === 'caller' ? `${name} declined` : 'Call declined', no_answer: call.role === 'caller' ? 'No answer' : 'Missed call',
+                           cancelled: 'Missed call', dropped: 'Call dropped', hangup: call.state === 'live' ? `Call ended · ${fmtDur(Date.now() - call.startedAt)}` : 'Call ended' }[d.reason] || 'Call ended';
+            if (missed) showToast(`Missed ${callLabel(call.kind)}`, `from ${name}`, true, { avatar: avatarFor(call.peerId, name), onClick: () => { const n = navOf('dm', call.peerId); if (n) n.click(); } });
+            endCallUi(missed ? null : text);
+        });
+        socket.on('disconnect', function () { if (call.state !== 'idle') endCallUi('Connection lost'); });
+
+        function endCallUi(finalText) {
+            stopCallSounds();
+            clearInterval(call.tick); call.tick = null;
+            if (call.pc) { try { call.pc.close(); } catch (e) {} call.pc = null; }
+            if (call.local) { call.local.getTracks().forEach(t => t.stop()); call.local = null; }
+            ['call-remote-video', 'call-local-video', 'call-remote-audio'].forEach(id => { callEl(id).srcObject = null; });
+            const o = callEl('call-overlay');
+            o.classList.remove('has-remote-video', 'peer-cam-off', 'self-cam-off');
+            call.state = 'idle'; call.id = null; call.remote = null;
+            const token = ++call.token;
+            if (finalText) {
+                o.dataset.state = 'ended'; setCallState(finalText); callEl('call-peer-flags').innerHTML = '';
+                setTimeout(() => { if (token === call.token && call.state === 'idle') { o.hidden = true; o.classList.remove('mini'); } }, 1600);
+            } else { o.hidden = true; o.classList.remove('mini'); }
+        }
+
+        function toggleCallMic() {
+            if (!call.local) return;
+            call.mic = !call.mic;
+            call.local.getAudioTracks().forEach(t => { t.enabled = call.mic; });
+            renderCallButtons2(); sendMediaState();
+        }
+        function toggleCallCam() {
+            if (!call.local || call.kind !== 'video') return;
+            const tracks = call.local.getVideoTracks();
+            if (!tracks.length) { showToast('No camera', 'Your camera is not available on this call.'); return; }
+            call.cam = !call.cam;
+            tracks.forEach(t => { t.enabled = call.cam; });
+            renderCallButtons2(); sendMediaState();
+        }
+        async function flipCallCamera() {
+            if (!call.local || call.kind !== 'video' || !call.cam) return;
+            const facing = call.facing === 'user' ? 'environment' : 'user';
+            try {
+                const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: facing } } });
+                const track = s.getVideoTracks()[0], old = call.local.getVideoTracks()[0];
+                const sender = call.pc && call.pc.getSenders().find(x => x.track && x.track.kind === 'video');
+                if (sender) await sender.replaceTrack(track);
+                if (old) { call.local.removeTrack(old); old.stop(); }
+                call.local.addTrack(track);
+                call.facing = facing;
+                callEl('call-local-video').srcObject = call.local;
+                callEl('call-local-video').classList.toggle('mirror', facing === 'user');
+            } catch (e) { showToast('Only one camera', "This device doesn't have another camera to switch to."); }
+        }
+        function toggleCallMini() {
+            const o = callEl('call-overlay'), mini = !o.classList.contains('mini');
+            o.classList.toggle('mini', mini);
+            callEl('call-mini-toggle').innerHTML = mini ? ICON.maximize : ICON.minimize;
+            callEl('call-mini-toggle').setAttribute('aria-label', mini ? 'Expand call' : 'Minimize call');
+        }
+        // tapping the small floating call (not one of its buttons) opens it full size again
+        callEl('call-overlay').addEventListener('click', e => {
+            if (callEl('call-overlay').classList.contains('mini') && !e.target.closest('button')) toggleCallMini();
+        });
+        window.addEventListener('beforeunload', () => { if (call.id && call.state !== 'idle') socket.emit('call_hangup', { call_id: call.id }); });
+
+        function renderCallButtons() {
+            if (currentChatType !== 'dm' || !currentChatId || currentChatId === myUserId) return;
+            document.getElementById('header-actions').innerHTML =
+                `<button class="icon-btn h-call" onclick="startCall('audio')" title="Voice call" aria-label="Voice call">${ICON.phone}</button>` +
+                `<button class="icon-btn h-call" onclick="startCall('video')" title="Video call" aria-label="Video call">${ICON.video}</button>`;
+        }
 
         /* ---------- GIF picker (Giphy) ---------- */
         let gifSearchTimer = null;
@@ -2415,7 +3022,7 @@
             if (type === 'dm') {
                 setHeaderAvatar(avatarFor(id, name), name, false);
                 if (id === myUserId) { subtitle.textContent = 'Notes to self · only you can see these'; subtitle.classList.remove('online', 'away'); }
-                else setDmSubtitle(id);
+                else { setDmSubtitle(id); renderCallButtons(); }
             } else {
                 applyGroupHeaderPhoto(id, name); subtitle.textContent = ''; subtitle.classList.remove('online');
             }
@@ -2428,6 +3035,8 @@
             if (!isPhone()) document.getElementById('message-input').focus();   // don't throw the keyboard up on phones
             syncComposer();
             socket.emit('join_chat', { type: type, id: id });
+            renderSchedPill();
+            socket.emit('get_scheduled', { type: type, id: id });
         }
 
         // Shimmering placeholder bubbles while the history loads.
@@ -3069,6 +3678,11 @@
             return [
                 { label: 'New group', icon: 'usersplus', kw: 'create team channel', run: openGroupModal },
                 { label: 'Search messages', icon: 'search', kw: 'find text history', run: openSearch },
+                ...(currentChatId ? [{ label: 'Shared media in this chat', icon: 'media', kw: 'photos videos files links gallery attachments', run: openSharedMedia },
+                                     { label: 'Schedule a message', icon: 'clock', kw: 'later send time timer', run: () => openSchedule(false) }] : []),
+                ...(currentChatType === 'dm' && currentChatId && currentChatId !== myUserId
+                    ? [{ label: `Voice call ${userNames[currentChatId] || ''}`.trim(), icon: 'phone', kw: 'call ring audio phone', run: () => startCall('audio') },
+                       { label: `Video call ${userNames[currentChatId] || ''}`.trim(), icon: 'video', kw: 'call camera facetime', run: () => startCall('video') }] : []),
                 { label: 'Saved messages', icon: 'bookmark', kw: 'notes self me', run: () => { const n = navOf('dm', myUserId); if (n) n.click(); } },
                 { label: dark ? 'Switch to light mode' : 'Switch to dark mode', icon: dark ? 'sun' : 'moon', kw: 'theme appearance night day', run: () => toggleTheme() },
                 { label: 'Set your status', icon: 'sparkles', kw: 'availability busy away dnd do not disturb', run: () => toggleStatusMenu(null) },
