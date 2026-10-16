@@ -32,6 +32,9 @@ def client():
     with appmod.app.app_context():
         appmod.db.drop_all()
         appmod.db.create_all()
+    # in-memory presence and call state would otherwise leak between tests (user ids are reused)
+    for state in (appmod.online_users, appmod.user_status, appmod.active_calls, appmod.user_call):
+        state.clear()
     with appmod.app.test_client() as c:
         yield c
 
@@ -284,3 +287,140 @@ def test_only_site_admins_get_the_approval_inbox(client, monkeypatch):
     with appmod.app.app_context():
         assert appmod.User.query.filter_by(username="newbie").first().approved
         assert appmod.ApprovalRequest.query.count() == 0
+
+
+# ---------- scheduled messages ----------
+
+def _online(username):
+    """A logged-in socket that has joined its personal room, like an open dashboard tab."""
+    s = _socket_for(username)
+    s.emit("register_user")
+    s.get_received()
+    return s
+
+
+def _uid(username):
+    with appmod.app.app_context():
+        return appmod.User.query.filter_by(username=username).first().id
+
+
+def test_schedule_list_cancel_and_send_now(client):
+    from datetime import datetime, timedelta, timezone
+    amy, ben = _online("amy"), _online("ben")
+    ben_id = _uid("ben")
+    later = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    amy.emit("schedule_message", {"type": "dm", "id": ben_id, "message": "see you at 9", "send_at": later})
+    got = amy.get_received()
+    assert any(e["name"] == "scheduled_ack" and e["args"][0]["ok"] for e in got)
+    items = [e for e in got if e["name"] == "scheduled_list"][-1]["args"][0]["items"]
+    assert [i["content"] for i in items] == ["see you at 9"]
+    sid = items[0]["id"]
+
+    # someone else can't cancel or send it
+    ben.emit("cancel_scheduled", {"id": sid})
+    ben.emit("send_scheduled_now", {"id": sid})
+    with appmod.app.app_context():
+        assert appmod.ScheduledMessage.query.get(sid).sent is False
+
+    # send now delivers it once and empties the list
+    amy.emit("send_scheduled_now", {"id": sid})
+    amy.emit("send_scheduled_now", {"id": sid})
+    with appmod.app.app_context():
+        assert appmod.Message.query.filter_by(content="see you at 9").count() == 1
+    assert any(e["name"] == "receive_message" and e["args"][0]["message"] == "see you at 9" for e in ben.get_received())
+
+    # a second one can be cancelled
+    amy.emit("schedule_message", {"type": "dm", "id": ben_id, "message": "never mind", "send_at": later})
+    sid2 = [e for e in amy.get_received() if e["name"] == "scheduled_list"][-1]["args"][0]["items"][0]["id"]
+    amy.emit("cancel_scheduled", {"id": sid2})
+    assert [e for e in amy.get_received() if e["name"] == "scheduled_list"][-1]["args"][0]["items"] == []
+
+
+def test_schedule_rejects_past_times(client):
+    from datetime import datetime, timedelta, timezone
+    cal = _online("cal")
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    cal.emit("schedule_message", {"type": "dm", "id": _uid("cal"), "message": "too late", "send_at": past})
+    acks = [e["args"][0] for e in cal.get_received() if e["name"] == "scheduled_ack"]
+    assert acks and acks[0]["ok"] is False
+    with appmod.app.app_context():
+        assert appmod.ScheduledMessage.query.count() == 0
+
+
+# ---------- shared media ----------
+
+def test_shared_media_sorts_photos_files_and_links(client):
+    dee, outsider = _online("dee"), _online("eve")
+    gid = _make_group("crew", "dee")
+    with appmod.app.app_context():
+        dee_id = _uid("dee")
+        for kw in ({"file_url": "/p.jpg", "file_type": "image", "file_name": "p.jpg"},
+                   {"file_url": "/g", "file_type": "image", "file_name": "gif.gif"},
+                   {"file_url": "/v.webm", "file_type": "video", "file_name": "voice_123.webm"},
+                   {"file_url": "/r.pdf", "file_type": "document", "file_name": "report.pdf"},
+                   {"content": "look https://example.com/a, and again https://example.com/a"},
+                   {"content": "no link here"}):
+            appmod.db.session.add(appmod.Message(sender_id=dee_id, group_id=gid, **kw))
+        appmod.db.session.commit()
+
+    outsider.emit("get_shared_media", {"type": "group", "id": gid})
+    assert not [e for e in outsider.get_received() if e["name"] == "shared_media"]
+
+    dee.emit("get_shared_media", {"type": "group", "id": gid})
+    d = [e for e in dee.get_received() if e["name"] == "shared_media"][0]["args"][0]
+    assert sorted(m["kind"] for m in d["media"]) == ["gif", "image"]
+    assert sorted(f["kind"] for f in d["files"]) == ["document", "voice"]
+    assert [l["url"] for l in d["links"]] == ["https://example.com/a"]   # each link once
+
+
+# ---------- calls ----------
+
+def test_call_rings_connects_relays_and_logs(client):
+    fay, gus, hal = _online("fay"), _online("gus"), _online("hal")
+    gus_id = _uid("gus")
+    resp = fay.emit("call_invite", {"to": gus_id, "kind": "video"}, callback=True)
+    assert resp["ok"]
+    call_id = resp["call_id"]
+    ring = [e for e in gus.get_received() if e["name"] == "call_incoming"]
+    assert ring and ring[0]["args"][0]["from_name"] == "fay" and ring[0]["args"][0]["kind"] == "video"
+
+    # only the person being called can pick up, and nobody else can listen in
+    assert hal.emit("call_accept", {"call_id": call_id}, callback=True)["ok"] is False
+    assert gus.emit("call_accept", {"call_id": call_id}, callback=True)["ok"] is True
+    assert any(e["name"] == "call_accepted" for e in fay.get_received())
+    fay.emit("call_signal", {"call_id": call_id, "data": {"type": "offer", "sdp": "v=0"}})
+    hal.emit("call_signal", {"call_id": call_id, "data": {"type": "offer", "sdp": "evil"}})
+    relayed = [e["args"][0]["data"] for e in gus.get_received() if e["name"] == "call_signal"]
+    assert relayed == [{"type": "offer", "sdp": "v=0"}]
+
+    # a third person gets "busy" while they talk
+    assert hal.emit("call_invite", {"to": gus_id, "kind": "audio"}, callback=True)["reason"] == "busy"
+
+    gus.emit("call_hangup", {"call_id": call_id})
+    assert any(e["name"] == "call_ended" for e in fay.get_received())
+    with appmod.app.app_context():
+        lines = [m.content for m in appmod.Message.query.filter_by(is_system=True).all()]
+    assert any(t.startswith("🎥 Video call · ") for t in lines)
+    assert call_id not in appmod.active_calls and gus_id not in appmod.user_call
+
+
+def test_call_to_offline_or_blocked_user(client):
+    ida = _online("ida")
+    _socket_for("jon")          # signed up, but no dashboard open
+    jon_id = _uid("jon")
+    assert ida.emit("call_invite", {"to": jon_id, "kind": "audio"}, callback=True)["reason"] == "offline"
+    with appmod.app.app_context():
+        assert appmod.Message.query.filter_by(is_system=True, content="📞 Missed voice call from ida").count() == 1
+        appmod.db.session.add(appmod.BlockedUser(blocker_id=jon_id, blocked_id=_uid("ida")))
+        appmod.db.session.commit()
+    assert ida.emit("call_invite", {"to": jon_id, "kind": "audio"}, callback=True)["reason"] == "blocked"
+
+
+def test_unanswered_call_ends_as_missed(client, monkeypatch):
+    import time
+    monkeypatch.setattr(appmod, "CALL_RING_SECONDS", 0.2)
+    kai, lea = _online("kai"), _online("lea")
+    call_id = kai.emit("call_invite", {"to": _uid("lea"), "kind": "audio"}, callback=True)["call_id"]
+    time.sleep(0.6)
+    ended = [e["args"][0] for e in lea.get_received() if e["name"] == "call_ended"]
+    assert ended and ended[0] == {"call_id": call_id, "reason": "no_answer"}

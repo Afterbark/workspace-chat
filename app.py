@@ -141,6 +141,15 @@ if _CLOUDINARY_AVAILABLE:
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
 VAPID_CLAIM = os.environ.get('VAPID_CLAIM_EMAIL', 'mailto:admin@example.com')
+
+# Calls: public STUN servers let two browsers find each other. Some mobile networks and
+# strict Wi-Fi also need a TURN relay; set TURN_URL (comma-separated), TURN_USERNAME and
+# TURN_CREDENTIAL to add one.
+ICE_SERVERS = [{'urls': ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']}]
+if os.environ.get('TURN_URL'):
+    ICE_SERVERS.append({'urls': [u.strip() for u in os.environ['TURN_URL'].split(',') if u.strip()],
+                        'username': os.environ.get('TURN_USERNAME', ''),
+                        'credential': os.environ.get('TURN_CREDENTIAL', '')})
 _vapid = None
 if _PUSH_AVAILABLE and VAPID_PRIVATE_KEY:
     try:
@@ -1100,6 +1109,7 @@ def dashboard():
                            my_presence=(current_user.manual_presence or 'available'),
                            my_status_message=status_message_of(current_user),
                            giphy_api_key=os.environ.get('GIPHY_API_KEY', ''),
+                           ice_servers=ICE_SERVERS,
                            is_admin=is_site_admin(current_user),
                            pending_requests=([serialize_request(r) for r in ApprovalRequest.query.order_by(ApprovalRequest.id.desc()).all()]
                                              if is_site_admin(current_user) else []))
@@ -1457,6 +1467,10 @@ def on_set_status_message(data):
 def on_disconnect():
     if not current_user.is_authenticated:
         return
+    try:
+        drop_calls_for_sid(request.sid)
+    except Exception:
+        db.session.rollback()
     uid = current_user.id
     if uid in online_users:
         online_users[uid] -= 1
@@ -2216,24 +2230,275 @@ def on_dismiss_report(data):
         log_admin('dismiss_report', f"Report #{data['id']}")
     on_get_admin_dashboard()
 
+def scheduled_for(user_id, ct, cid):
+    """This user's not-yet-sent scheduled messages in one chat, soonest first."""
+    rows = (ScheduledMessage.query
+            .filter_by(sender_id=user_id, chat_type=ct, chat_id=cid, sent=False)
+            .order_by(ScheduledMessage.send_at).all())
+    return [{'id': s.id, 'content': s.content, 'send_at': iso_utc(s.send_at)} for s in rows]
+
+def push_scheduled_list(user_id, ct, cid):
+    socketio.emit('scheduled_list', {'type': ct, 'id': cid, 'items': scheduled_for(user_id, ct, cid)},
+                  to=f"user_sys_{user_id}")
+
 @socketio.on('schedule_message')
 def on_schedule_message(data):
-    ct, cid = data['type'], int(data['id'])
-    content = (data.get('message') or '').strip()
-    if not content:
-        return
     try:
-        send_at = datetime.fromisoformat(data['send_at'].replace('Z', '+00:00'))
-        if send_at.tzinfo is not None:
-            send_at = send_at.astimezone(UTC_TZ).replace(tzinfo=None)  # store naive UTC
-    except Exception:
+        ct, cid = data['type'], int(data['id'])
+        send_at = datetime.fromisoformat(str(data['send_at']).replace('Z', '+00:00'))
+    except (KeyError, TypeError, ValueError):
+        return
+    content = (data.get('message') or '').strip()
+    if ct not in ('dm', 'group') or not content:
+        return
+    if send_at.tzinfo is not None:
+        send_at = send_at.astimezone(UTC_TZ).replace(tzinfo=None)  # store naive UTC
+    now = utcnow()
+    if send_at < now - timedelta(minutes=1) or send_at > now + timedelta(days=366):
+        emit('scheduled_ack', {'ok': False, 'error': 'Pick a time within the next year.'})
         return
     if not can_access_chat(ct, cid, write=True):
         return
     db.session.add(ScheduledMessage(sender_id=current_user.id, chat_type=ct, chat_id=cid,
-                                    content=content, send_at=send_at, sent=False))
+                                    content=content[:4000], send_at=send_at, sent=False))
     db.session.commit()
-    emit('scheduled_ack', {'ok': True, 'send_at': send_at.isoformat()})
+    emit('scheduled_ack', {'ok': True, 'send_at': iso_utc(send_at)})
+    push_scheduled_list(current_user.id, ct, cid)
+
+@socketio.on('get_scheduled')
+def on_get_scheduled(data):
+    try:
+        ct, cid = data['type'], int(data['id'])
+    except (KeyError, TypeError, ValueError):
+        return
+    if ct in ('dm', 'group') and can_access_chat(ct, cid):
+        emit('scheduled_list', {'type': ct, 'id': cid, 'items': scheduled_for(current_user.id, ct, cid)})
+
+def _claim_scheduled(sid, user_id):
+    """Atomically mark one of this user's pending scheduled messages as taken; returns it or None."""
+    sm = ScheduledMessage.query.filter_by(id=sid, sender_id=user_id, sent=False).first()
+    if not sm:
+        return None
+    claimed = ScheduledMessage.query.filter_by(id=sid, sent=False).update({'sent': True})
+    db.session.commit()
+    return sm if claimed else None
+
+@socketio.on('cancel_scheduled')
+def on_cancel_scheduled(data):
+    if not current_user.is_authenticated:
+        return
+    try:
+        sid = int(data['id'])
+    except (KeyError, TypeError, ValueError):
+        return
+    sm = ScheduledMessage.query.filter_by(id=sid, sender_id=current_user.id, sent=False).first()
+    if not sm:
+        return
+    ct, cid = sm.chat_type, sm.chat_id
+    ScheduledMessage.query.filter_by(id=sid, sent=False).delete(synchronize_session=False)
+    db.session.commit()
+    push_scheduled_list(current_user.id, ct, cid)
+
+@socketio.on('send_scheduled_now')
+def on_send_scheduled_now(data):
+    if not current_user.is_authenticated:
+        return
+    try:
+        sid = int(data['id'])
+    except (KeyError, TypeError, ValueError):
+        return
+    sm = _claim_scheduled(sid, current_user.id)
+    if not sm:
+        return
+    if can_access_chat(sm.chat_type, sm.chat_id, write=True):
+        deliver_scheduled(sm)
+    else:
+        push_scheduled_list(current_user.id, sm.chat_type, sm.chat_id)
+
+# ---------- shared media: every photo, file and link in one chat ----------
+@socketio.on('get_shared_media')
+def on_get_shared_media(data):
+    try:
+        ct, cid = data['type'], int(data['id'])
+    except (KeyError, TypeError, ValueError):
+        return
+    if ct not in ('dm', 'group') or not can_access_chat(ct, cid):
+        return
+    q = (base_chat_query(ct, cid, current_user.id)
+         .filter(Message.is_deleted == False, Message.is_system == False)
+         .order_by(None).order_by(Message.id.desc()))
+    names = {}
+    def who(uid):
+        if uid not in names:
+            u = db.session.get(User, uid)
+            names[uid] = u.username if u else 'Unknown'
+        return names[uid]
+
+    media, files = [], []
+    for m in q.filter(Message.file_url.isnot(None), Message.file_url != '').limit(500):
+        name = m.file_name or ''
+        item = {'id': m.id, 'url': m.file_url, 'name': name, 'ts': iso_utc(m.timestamp), 'sender': who(m.sender_id)}
+        if m.file_type == 'audio' or name.lower().startswith('voice_'):
+            files.append(dict(item, kind='voice'))
+        elif m.file_type in ('image', 'video'):
+            media.append(dict(item, kind='gif' if name == 'gif.gif' else m.file_type))
+        else:
+            files.append(dict(item, kind='document'))
+
+    links, seen = [], set()
+    for m in q.filter(Message.content.ilike('%http%')).limit(500):
+        for raw in URL_RE.findall(m.content or ''):
+            url = raw.rstrip('.,);]')
+            if url in seen:
+                continue
+            seen.add(url)
+            lp = LinkPreview.query.filter_by(url=url, ok=True).first()
+            links.append({'id': m.id, 'url': url, 'ts': iso_utc(m.timestamp), 'sender': who(m.sender_id),
+                          'title': lp.title if lp else None, 'image': lp.image if lp else None,
+                          'domain': (urlparse(url).hostname or '').removeprefix('www.')})
+        if len(links) >= 300:
+            break
+
+    emit('shared_media', {'type': ct, 'id': cid, 'media': media, 'files': files, 'links': links})
+
+
+# ---------- one-to-one voice / video calls ----------
+# Audio and video go straight between the two browsers (WebRTC). The server only rings
+# the other person and relays the offer / answer / network candidates between the two
+# tabs on the call. Call state lives in memory, which is fine with one gunicorn worker.
+CALL_RING_SECONDS = 35
+active_calls = {}   # call_id -> {caller, callee, kind, caller_sid, callee_sid, accepted_at}
+user_call = {}      # user_id -> call_id, while their call rings or is connected
+
+def call_label(kind):
+    return 'video call' if kind == 'video' else 'voice call'
+
+def log_call(caller_id, callee_id, kind, seconds):
+    """Leave a line in the DM: '📞 Voice call · 4:12', or '📞 Missed voice call from Larry'."""
+    caller = db.session.get(User, caller_id)
+    icon = '🎥' if kind == 'video' else '📞'
+    if seconds is None:
+        text_ = f"{icon} Missed {call_label(kind)} from {caller.username if caller else 'someone'}"
+    else:
+        s_ = int(seconds)
+        dur = f"{s_ // 3600}:{s_ % 3600 // 60:02d}:{s_ % 60:02d}" if s_ >= 3600 else f"{s_ // 60}:{s_ % 60:02d}"
+        text_ = f"{icon} {call_label(kind).capitalize()} · {dur}"
+    msg = Message(sender_id=caller_id, receiver_id=callee_id, content=text_, is_system=True)
+    db.session.add(msg)
+    db.session.commit()
+    packet = {
+        'msg_id': msg.id, 'username': '', 'message': text_,
+        'file_url': None, 'file_type': None, 'file_name': None,
+        'type': 'dm', 'group_id': None, 'receiver_id': callee_id, 'sender_id': caller_id,
+        'timestamp': fmt_time(msg.timestamp), 'ts_iso': iso_utc(msg.timestamp),
+        'mentions': [], 'reply_to': None, 'reactions': [], 'edited': False,
+        'pinned': False, 'forwarded': False, 'preview': None, 'is_system': True,
+    }
+    socketio.emit('receive_message', packet, to=f"user_sys_{caller_id}")
+    socketio.emit('receive_message', packet, to=f"user_sys_{callee_id}")
+    socketio.emit('receive_message', packet, to=dm_room(caller_id, callee_id))
+
+def end_call(call_id, reason):
+    c = active_calls.pop(call_id, None)
+    if not c:
+        return
+    for uid in (c['caller'], c['callee']):
+        if user_call.get(uid) == call_id:
+            user_call.pop(uid, None)
+    payload = {'call_id': call_id, 'reason': reason}
+    socketio.emit('call_ended', payload, to=f"user_sys_{c['caller']}")
+    socketio.emit('call_ended', payload, to=f"user_sys_{c['callee']}")
+    seconds = (utcnow() - c['accepted_at']).total_seconds() if c['accepted_at'] else None
+    log_call(c['caller'], c['callee'], c['kind'], seconds)
+
+def _ring_timeout(call_id):
+    socketio.sleep(CALL_RING_SECONDS)
+    with app.app_context():
+        c = active_calls.get(call_id)
+        if c and not c['accepted_at']:
+            end_call(call_id, 'no_answer')
+
+@socketio.on('call_invite')
+def on_call_invite(data):
+    if not current_user.is_authenticated:
+        return {'ok': False, 'reason': 'auth'}
+    try:
+        to = int(data['to'])
+    except (KeyError, TypeError, ValueError):
+        return {'ok': False, 'reason': 'bad'}
+    kind = 'video' if data.get('kind') == 'video' else 'audio'
+    me = current_user.id
+    callee = db.session.get(User, to)
+    if not callee or to == me:
+        return {'ok': False, 'reason': 'bad'}
+    if is_blocked_between(me, to):
+        return {'ok': False, 'reason': 'blocked'}
+    if me in user_call:
+        return {'ok': False, 'reason': 'self_busy'}
+    if to in user_call or to not in online_users:
+        reason = 'busy' if to in user_call else 'offline'
+        log_call(me, to, kind, None)
+        if reason == 'offline':
+            send_push_to_user(to, current_user.username, f"Missed {call_label(kind)}")
+        return {'ok': False, 'reason': reason}
+    call_id = uuid.uuid4().hex
+    active_calls[call_id] = {'caller': me, 'callee': to, 'kind': kind, 'caller_sid': request.sid,
+                             'callee_sid': None, 'accepted_at': None}
+    user_call[me] = user_call[to] = call_id
+    socketio.emit('call_incoming', {'call_id': call_id, 'from_id': me, 'from_name': current_user.username,
+                                    'kind': kind}, to=f"user_sys_{to}")
+    socketio.start_background_task(_ring_timeout, call_id)
+    return {'ok': True, 'call_id': call_id}
+
+@socketio.on('call_accept')
+def on_call_accept(data):
+    c = active_calls.get((data or {}).get('call_id'))
+    if not c or not current_user.is_authenticated or c['callee'] != current_user.id or c['accepted_at']:
+        return {'ok': False}
+    c['callee_sid'], c['accepted_at'] = request.sid, utcnow()
+    emit('call_accepted', {'call_id': data['call_id']}, to=c['caller_sid'])
+    # any other tab or device of the callee stops ringing
+    socketio.emit('call_taken', {'call_id': data['call_id']}, to=f"user_sys_{current_user.id}", skip_sid=request.sid)
+    return {'ok': True}
+
+@socketio.on('call_decline')
+def on_call_decline(data):
+    call_id = (data or {}).get('call_id')
+    c = active_calls.get(call_id)
+    if c and current_user.is_authenticated and c['callee'] == current_user.id and not c['accepted_at']:
+        end_call(call_id, 'declined')
+
+@socketio.on('call_hangup')
+def on_call_hangup(data):
+    call_id = (data or {}).get('call_id')
+    c = active_calls.get(call_id)
+    if not c or not current_user.is_authenticated or current_user.id not in (c['caller'], c['callee']):
+        return
+    if c['accepted_at']:
+        reason = 'hangup'
+    else:
+        reason = 'cancelled' if current_user.id == c['caller'] else 'declined'
+    end_call(call_id, reason)
+
+@socketio.on('call_signal')
+def on_call_signal(data):
+    """Relay an offer / answer / ICE candidate / mute state to the other tab on the call."""
+    c = active_calls.get((data or {}).get('call_id'))
+    payload = (data or {}).get('data')
+    if not c or not c['accepted_at'] or not isinstance(payload, dict) or len(json.dumps(payload)) > 20000:
+        return
+    if request.sid == c['caller_sid']:
+        target = c['callee_sid']
+    elif request.sid == c['callee_sid']:
+        target = c['caller_sid']
+    else:
+        return
+    emit('call_signal', {'call_id': data['call_id'], 'data': payload}, to=target)
+
+def drop_calls_for_sid(sid):
+    for call_id, c in list(active_calls.items()):
+        if sid in (c['caller_sid'], c['callee_sid']):
+            end_call(call_id, 'dropped')
 
 @app.route('/export_chat')
 @login_required
@@ -2348,6 +2613,7 @@ def deliver_scheduled(sm):
                     if u.id not in online_users and not is_muted(u.id, 'group', sm.chat_id):
                         send_push_to_user(u.id, f"#{group.name}", f"{sender.username}: {sm.content}")
     socketio.emit('receive_message', packet, to=room)
+    push_scheduled_list(sm.sender_id, sm.chat_type, sm.chat_id)
 
 def scheduled_poller():
     while True:
@@ -2359,7 +2625,10 @@ def scheduled_poller():
                     ScheduledMessage.send_at <= utcnow()
                 ).all()
                 for sm in due:
-                    sm.sent = True
+                    # claim it first, so a "send now" racing the poller can't deliver it twice
+                    if not ScheduledMessage.query.filter_by(id=sm.id, sent=False).update({'sent': True}):
+                        db.session.commit()
+                        continue
                     db.session.commit()
                     try:
                         deliver_scheduled(sm)
